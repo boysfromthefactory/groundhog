@@ -17,7 +17,7 @@ use Illuminate\Database\Eloquent\Model;
 final readonly class RecurrenceColumns
 {
     public function __construct(
-        public string  $start,
+        public string $start,
         public ?string $end,
     ) {}
 
