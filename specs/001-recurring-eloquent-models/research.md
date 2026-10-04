@@ -70,12 +70,15 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   (select <model columns, start/end replaced by the occurrence's values>,
           <pk: null for virtual rows>, groundhog_series_key, groundhog_original_starts_at
      from <table> m
+     left join (select xe.exception_id, xe.original_starts_at, re.recurrable_id as series_key
+                  from groundhog_exclusions xe
+                  join groundhog_recurrences re on re.id = xe.recurrence_id
+                 where re.recurrable_type = :morphClass) xl on xl.exception_id = m.<pk>  -- identifies exception rows
+     left join <table> s                 on s.<pk> = xl.series_key                   -- soft-deletable models only
      left join groundhog_recurrences r   on r.recurrable_type = :morphClass and r.recurrable_id = m.<pk>
      left join groundhog_occurrences o   on o.recurrence_id = r.id [and pushed-down start bounds]
      left join groundhog_exclusions xo   on xo.recurrence_id = o.recurrence_id and xo.original_starts_at = o.starts_at
-     left join groundhog_exclusions xe   on xe.exception_id = m.<pk>   -- identifies exception rows
-     left join groundhog_recurrences re  on re.id = xe.recurrence_id and re.recurrable_type = :morphClass
-    where (r.id is null or (o.id is not null and xo.id is null and (r.is_infinite = false or o.starts_at < :cap)))
+    where (r.id is null or (o.recurrence_id is not null and xo.recurrence_id is null and (not r.is_infinite or o.starts_at < :cap)))
   ) as <table>
   ```
 
@@ -97,11 +100,22 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   `decrementEach`, `touch`, `insert`, `insertOrIgnore`, `insertGetId`, `insertUsing`,
   `insertOrIgnoreUsing`, `upsert` to drop the occurrence scope first, so they act on stored rows
   with the user's own constraints.
-- **Retrieval by key (FR-015)**: `RecurringBuilder::whereKey()` drops the occurrence scope (used by
-  `find`, `findMany`, `findOrFail`, `destroy`); the trait's `resolveRouteBindingQuery()` does the
-  same. Series rows are absent from the expanded set, so key lookups must read stored rows.
-- **Escape hatch**: `withoutOccurrences()` (scope extension, like `withTrashed()`) returns stored
-  rows. Optional; never required for normal use.
+- **Retrieval by key (FR-015)**: when a top-level, AND-ed clause equates the primary key with a
+  value, a list or a column, the scope removes itself and the query reads stored rows. This covers
+  `find`, `findMany`, `whereKey`, `destroy`, belongs-to relations and `whereHas` from other
+  models without overriding each entry point: virtual rows have no key, so only the series row
+  could be lost. The trait's `resolveRouteBindingQuery()` drops the scope for custom route keys.
+- **Join order (SC-003)**: left joins keep their written order, so the joins that depend only on
+  the stored row (`xl`, `s`) come before the occurrence joins and run once per record, not once
+  per occurrence (MySQL 8.4: −0.1 s per query at the SC-003 volume).
+- **Exception link isolation**: The model-type filter sits inside the `xl` subquery. A plain
+  left join on `exception_id` alone would duplicate a row whenever exceptions of two model types
+  share a key value.
+- **Keyed iteration (FR-007)**: `chunkById`/`lazyById`/`eachById` page by `key > last key`;
+  virtual rows have a null key and would be skipped, so `RecurringBuilder` throws
+  `RecurrenceNotSupported` while the occurrence scope is active.
+- **Escape hatch**: `RecurringBuilder::withoutOccurrences()` removes `OccurrenceScope` and returns
+  stored rows, like `withTrashed()` does for soft deletes. Optional; never required for normal use.
 - **Custom builders**: The trait's `newEloquentBuilder()` honours `#[UseEloquentBuilder]` only if
   the class extends `RecurringBuilder`; otherwise it throws `IncompatibleEloquentBuilder`
   instead of silently losing FR-015/FR-026.
@@ -137,12 +151,17 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
 - **Decision**:
   - **On rule save**: generate from DTSTART up to `max(now + horizon, previous materialized_until)` (infinite) or to the end (finite).
   - **On read**: extend lagging infinite recurrences in a transaction that takes a `lockForUpdate` on the recurrence row, re-reads `materialized_until`, and inserts in chunks of 500 via `insertOrIgnore` on the unique `(recurrence_id, starts_at)` key. This is idempotent if two workers race.
-  - **On rule/start change**: the same locked transaction deletes the index rows, regenerates them, detaches exceptions (FR-022) and rewrites DTSTART.
-  - **On duration change only**: regenerate the index without detaching.
+  - **On rule/start change**: the same locked transaction deletes the index rows, regenerates them, resets the series' exclusions (exceptions detached, cancellations discarded; FR-022) and rewrites DTSTART. A rule counts as changed only when its `rfcString()` differs from the stored text.
+  - **On duration change only**: regenerate the index without resetting exclusions.
 - **Limit**: `config('groundhog.max_occurrences_per_series')` (default 50,000) bounds any single
   generation pass. php-rrule is asked for `limit + 1` occurrences; reaching it throws
   `OccurrenceLimitExceeded` naming the series and window (SC-005, spec edge case "Runaway
   generation"). 50,000 covers 136 years of daily or 5.7 years of hourly occurrences.
+  Because a rule save materialises from DTSTART to `now + horizon` in one pass, rules denser than
+  the limit over that span (e.g. minutely) are rejected on save.
+- **Materialisation ceiling**: `config('groundhog.max_materialization_ahead')` (default `P10Y`).
+  A read that needs index rows later than `now + ceiling` throws `OccurrenceLimitExceeded`
+  before writing, so a single request cannot persist an unbounded number of rows (FR-008).
 - **Write connection**: materialisation runs on the model's connection inside a transaction, so
   read/write-split setups use the write PDO.
 - **Alternatives considered**: Scheduled artisan command to pre-extend — rejected as the only
@@ -192,6 +211,11 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   - **Identity attributes**: `groundhog_series_key` and `groundhog_original_starts_at` stay as
     visible attributes, so API clients can address an occurrence, and so
     `series()` (a `BelongsTo` on `groundhog_series_key`) can be eager loaded.
+  - **Stored rows**: Rows loaded without the occurrence scope (key lookups, route binding,
+    `refresh()`, `withoutOccurrences()`) get the same attributes from one
+    `ExceptionLedger::exceptionLinksFor()` query in `RecurringBuilder::getModels()`, before eager
+    loading, so `toArray()` and `with('series')` behave the same as on expanded rows. `cursor()`
+    bypasses `getModels()`; its models resolve the link on first predicate use.
   - **Stripping**: `getAttributesForInsert()` and `getDirtyForUpdate()` strip both identity
     attributes and a null key.
   - **Explicit selects**: When the user selected explicit columns (not distinct, not grouped),
@@ -199,11 +223,11 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
 - **Write interception (all inside a DB transaction)**:
   - **`save()`**:
     - Virtual occurrence → insert as a new row, then insert the exclusion with `exception_id` (FR-017, FR-025).
-    - Any record with a pending rule → persist the rule and (re)build the index.
+    - Any record with a pending rule → persist the rule: first rule → build the index; changed `rfcString()` → rebuild it; identical rule → no change.
   - **`delete()`**:
     - Virtual occurrence → fire `deleting`; if not halted, insert a cancellation exclusion; fire `deleted` (FR-019, FR-024).
     - Exception, hard delete → null its exclusion's `exception_id`, leaving a cancellation (FR-020). Soft delete keeps the link; the soft-delete scope hides the row, so the occurrence stays cancelled until restore.
-    - Series → delete its exceptions through model `delete()`, then the recurrence row; FKs cascade index and exclusions (FR-023).
+    - Series, hard delete → force-delete its exceptions (including already-trashed ones) through model `forceDelete()`, then the recurrence row; FKs cascade index and exclusions (FR-023). Soft delete → only the series row is trashed; its exceptions are hidden through the derived deleted-at column until restore.
   - **`update()`**: Eloquent returns `false` on non-existing models (verified); the trait performs
     fill + save for virtual occurrences (US3-5).
   - **`incrementOrDecrement()`**: Eloquent runs an unconstrained table-wide update for
@@ -226,8 +250,8 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   - **CI matrix**: SQLite (in-memory), MySQL 8.4 and PostgreSQL 17. The derived-table SQL is
     the main portability risk.
   - **Static analysis**: Larastan level 9. Pint for formatting.
-  - **Benchmark**: An opt-in Pest group `benchmark` measures SC-003; it is excluded from the
-    default run because it is time-based.
+  - **Benchmark**: `composer bench` runs `benchmarks/pagination.php`, a measurement script
+    outside the Pest suite (SC-003), because a wall-clock assertion cannot be deterministic.
 - **Alternatives considered**: SQLite-only CI (skeleton default) — rejected; join/type semantics
   differ (PostgreSQL rejects `varchar = bigint` comparisons), which is exactly where this package
   can break.

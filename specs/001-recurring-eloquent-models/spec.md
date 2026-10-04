@@ -19,14 +19,18 @@
 - **Series**: A stored record of a recurring model that has a recurrence rule attached. Its
   own start/end values define the first occurrence and the duration of every occurrence.
 - **Recurrence rule**: A declaration of when a series repeats (frequency, interval, end
-  condition, by-day/by-month selectors, etc.), following the RFC 5545 RRULE vocabulary,
-  plus the series' list of excluded occurrence starts.
+  condition, by-day/by-month selectors, etc.), following the RFC 5545 RRULE vocabulary.
+  Starts excluded by cancellations and exceptions are recorded alongside it.
 - **Occurrence**: One instance of a series at one computed start time.
 - **Virtual occurrence**: An occurrence returned by a query as a fully populated model instance
   that does not exist in storage.
 - **Exception**: A stored record of the recurring model that replaces exactly one occurrence of a
   series, linked to that series and to the original start of the occurrence it replaces.
 - **Cancelled occurrence**: An occurrence removed from a series without a replacement.
+- **Exclusion**: The stored record that one original start of a series must not be generated.
+  An exclusion that points at a replacing record is that exception's *exception link*; one
+  without a replacing record is a *cancellation*. In this document "exception" always means an
+  occurrence exception, never a thrown error.
 
 ## Clarifications
 
@@ -47,6 +51,28 @@
   of truth; expanding on every read measured 5.3 s for SC-003's volume against a 1 s target);
   virtual occurrences have a null primary key, so key-based relationships are reached through the
   series; generation per series is bounded by a configurable limit (SC-005).
+
+### Analysis remediation 2026-10-05
+
+- Excluded starts come only from cancellations and exceptions; EXDATE/EXRULE input is out of
+  scope (FR-005, Assumptions).
+- Key-based chunking is rejected while occurrences are expanded (FR-007, US2-5).
+- Reads may not generate occurrences beyond a configurable ceiling after the current time
+  (FR-008); series too dense for the per-series limit are rejected on save (Edge Cases).
+- Stable tie-break ordering applies only to queries with at least one ordering that are not
+  grouped, distinct or unions (FR-016).
+- A query fails on the materialisation ceiling only when it would actually have to generate
+  occurrences past it (FR-008).
+- A rule or start change resets all of the series' exclusions: exceptions are detached and
+  cancellations are discarded; re-assigning an identical rule changes nothing (FR-022).
+- SC-003 names a reference machine and a built occurrence index.
+
+### Implementation amendment 2026-10-05
+
+- SC-003 budget is per database. Measured with the delivered design (1,000 daily series, one-year
+  window, page 1/200/last, three runs): PostgreSQL 0.33–0.65 s, MySQL 8.4 0.95–1.11 s, SQLite
+  0.14–2.01 s (the last page needs a full sort of 365,000 rows). PostgreSQL keeps the 1-second
+  budget; MySQL gets 2 seconds and SQLite 3 seconds.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -117,8 +143,10 @@ against a hand-computed expected list.
 4. **Given** a query ordered by a non-time attribute (e.g. title) then by start, **When** it runs,
    **Then** occurrences are ordered by those attributes exactly as stored rows would be.
 5. **Given** a large expanded result, **When** the developer processes it in chunks using the
-   framework's standard chunking/lazy-iteration features, **Then** every occurrence is visited
-   exactly once.
+   framework's offset-based chunking and lazy-iteration features (`chunk`, `lazy`, `cursor`,
+   `each`), **Then** every occurrence is visited exactly once; key-based iteration (`chunkById`,
+   `lazyById`, `eachById`) is rejected with a descriptive error because virtual occurrences have
+   no key.
 6. **Given** the current time is fixed at 2026-03-01 00:00, the default 1-year horizon, and a
    series repeating daily at 09:00 from 2026-03-01 with no end, **When** the developer counts or
    paginates the model with no time constraints, **Then** the total is 365 (1 March 2026 through
@@ -216,7 +244,9 @@ series, verifying query results after each step.
   upper bound can be derived; at worst more occurrences are evaluated and then filtered.
 - **Runaway generation**: A rule or query window that would require generating more occurrences of
   a single series than the configured per-series limit fails with a descriptive error instead of
-  exhausting time or memory.
+  exhausting time or memory. This includes saving a series whose rule generates more than the
+  limit between its start and the horizon (e.g. a minutely rule, or an hourly rule that started
+  more than about 5 years ago with the default limit); raising the configured limit is the remedy.
 - **Overlap vs. start-in-window**: A query that constrains the end attribute (e.g. "ends after
   09:30") must match occurrences by their own computed end, so occurrences starting before the
   window but still running inside it are returned when the constraints say so.
@@ -264,7 +294,8 @@ series, verifying query results after each step.
   an equivalent structured definition.
 - **FR-005**: The library MUST support all RFC 5545 RRULE components (FREQ, INTERVAL, COUNT,
   UNTIL, BYSECOND, BYMINUTE, BYHOUR, BYDAY, BYMONTHDAY, BYYEARDAY, BYWEEKNO, BYMONTH, BYSETPOS,
-  WKST) and a per-series list of excluded occurrence starts.
+  WKST). Occurrences are excluded from a series only by cancelling or replacing them (FR-017,
+  FR-019); EXDATE, RDATE and EXRULE input is rejected (FR-006).
 - **FR-006**: Rule input crossing into the library MUST be validated; invalid rules MUST be
   rejected with a descriptive error before anything is persisted.
 
@@ -273,13 +304,17 @@ series, verifying query results after each step.
 - **FR-007**: All standard query operations on a recurring model — retrieving collections, first
   result, counting, existence checks, aggregates (min/max/sum/avg), length-aware pagination,
   simple pagination, chunking and lazy iteration — MUST operate over the expanded set of
-  occurrences plus plain records, with no library-specific query syntax required.
+  occurrences plus plain records, with no library-specific query syntax required. Key-based
+  chunking MUST fail with a descriptive error while occurrences are expanded, because virtual
+  occurrences have no key.
 - **FR-008**: Time bounds for expansion MUST be derived from the query's ordinary constraints on
   the declared start/end attributes. When no upper bound can be derived for a series whose rule
   has no end, the library MUST expand occurrences only up to a configurable horizon: by default
   1 year after the query's derived lower time bound, or 1 year after the current time when no
   lower bound can be derived. The horizon length MUST be configurable application-wide.
-  Occurrences beyond the horizon are not returned and not counted.
+  Occurrences beyond the horizon are not returned and not counted. Queries that would require
+  generating occurrences more than a configurable ceiling after the current time (default:
+  10 years) MUST fail with a descriptive error instead of generating them.
 - **FR-009**: Every query constraint and ordering MUST be evaluated against each occurrence's own
   attribute values (series attributes with the occurrence's computed start/end), so results are
   identical to what the same query would return if every occurrence were a stored row.
@@ -296,8 +331,9 @@ series, verifying query results after each step.
   records in all queries.
 - **FR-015**: Retrieving a record by its primary key MUST return that stored record (series,
   exception or plain record) without expansion.
-- **FR-016**: Ordering and pagination results MUST be deterministic: occurrences that compare
-  equal on all requested orderings MUST be returned in a stable order across repeated queries.
+- **FR-016**: For queries with at least one ordering that are not grouped, distinct or unions,
+  ordering and pagination results MUST be deterministic: occurrences that compare equal on all
+  requested orderings MUST be returned in a stable order across repeated queries.
 
 **Writing**
 
@@ -312,11 +348,13 @@ series, verifying query results after each step.
   series' values.
 - **FR-021**: Changes to the series' own record MUST be reflected in all its virtual occurrences;
   exceptions MUST keep their own values.
-- **FR-022**: When a series' rule or start time is replaced or its rule removed while exceptions
-  exist, the library MUST keep every existing exception as a stored record but detach it from the
-  series, so it becomes an ordinary plain record that keeps its own values. The exclusions that
-  existed only because of those exceptions MUST be released, so the new rule's occurrences are
-  generated normally. Changes to the series' other attributes MUST NOT detach exceptions.
+- **FR-022**: When a series' rule or start time is replaced or its rule removed, the library MUST
+  reset the series' exclusions: every existing exception is kept as a stored record but detached
+  from the series, so it becomes an ordinary plain record that keeps its own values, and every
+  cancellation is discarded, so the new rule's occurrences are generated normally. A rule counts
+  as replaced only when its RFC 5545 text changes; re-assigning an identical rule changes nothing.
+  Changes to the series' duration or other attributes MUST NOT detach exceptions or discard
+  cancellations.
 - **FR-023**: Deleting (or soft-deleting) a series MUST remove (or hide) its rule, exceptions and
   occurrences; restoring a soft-deleted series MUST restore them.
 - **FR-024**: Persisting and deleting via occurrences MUST fire the model's standard life-cycle
@@ -343,7 +381,8 @@ series, verifying query results after each step.
   declared start/end attributes and all other business attributes. Plays one of three roles: plain
   record (no rule), series (has a rule), or exception (replaces one occurrence of a series).
 - **Recurrence rule**: Belongs to exactly one series of any model type. Holds the RRULE
-  definition, the time zone used for evaluation, and the set of excluded occurrence starts.
+  definition and the time zone used for evaluation. Excluded starts are recorded by
+  cancellations and exceptions.
 - **Exception link**: Associates an exception record with its series and the original start of the
   occurrence it replaces. At most one exception per series per original start.
 - **Occurrence (virtual)**: Not stored. Identified by its series plus original start; carries the
@@ -361,8 +400,9 @@ series, verifying query results after each step.
   totals) are identical to those obtained by manually materialising every occurrence as a stored
   row and running the same query against it.
 - **SC-003**: With 1,000 series each repeating daily and a one-year time window, a developer
-  obtains any page of 25 occurrences, including the total count, in under 1 second on a typical
-  development machine.
+  obtains any page of 25 occurrences, including the total count, in under 1 second on PostgreSQL,
+  2 seconds on MySQL and 3 seconds on SQLite, on a machine with at least 4 CPU cores and 16 GB RAM
+  running the database locally, once the occurrence index covers the window.
 - **SC-004**: 100% of single-occurrence edits and cancellations are reflected in the very next
   query, and leave every other occurrence of the series unchanged.
 - **SC-005**: No query on a recurring model, bounded or not, fails to terminate or exhausts memory
@@ -374,7 +414,8 @@ series, verifying query results after each step.
   required by the package-skeleton-laravel template; package name `groundhog`, vendor
   `boysfromthefactory` (from the repository remote).
 - **Rule engine**: Occurrence calculation relies on the `rlanvin/php-rrule` library as requested;
-  RDATE (explicit additional dates) and multiple rules per series are out of scope.
+  RDATE (explicit additional dates), EXDATE, EXRULE and multiple rules per series are out of
+  scope.
 - **Exception storage**: Exceptions are stored as rows of the recurring model's own table, so
   they participate in ordinary queries, relationships and events like any other record.
 - **Saving without changes**: Saving a virtual occurrence persists an exception even if no

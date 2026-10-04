@@ -23,14 +23,15 @@ Owned by the application. The package adds no columns.
 | End column | `RECURRENCE_ENDS_AT` constant, default `ends_at`; `null` = model has no end. |
 | Role | Derived, never stored: **plain** (no recurrence, no exclusion link), **series** (has a `groundhog_recurrences` row), **exception** (referenced by `groundhog_exclusions.exception_id`). |
 
-Query-time identity attributes (present on rows returned through the occurrence scope, never
-written):
+Query-time identity attributes (present on rows returned through the occurrence scope, and on
+stored rows loaded through `RecurringBuilder` without it, where they are resolved in one query per
+result set; never written):
 
 | Attribute | Plain | Series* | Virtual occurrence | Exception |
 |---|---|---|---|---|
 | primary key | own | own | `null` | own |
-| `groundhog_series_key` | `null` | — | series key | series key |
-| `groundhog_original_starts_at` | `null` | — | occurrence start | replaced start |
+| `groundhog_series_key` | `null` | `null` (stored-row loads) | series key | series key |
+| `groundhog_original_starts_at` | `null` | `null` (stored-row loads) | occurrence start | replaced start |
 | `exists` | true | true | **false** | true |
 
 \* Series rows never appear in expanded results; they are reachable by key (FR-015) or
@@ -54,22 +55,29 @@ Validation (on assignment, before any write; FR-006):
 - The owning record is not an exception (`RecurrenceNotSupported`).
 - The model's start attribute is non-null when saving (`RecurrenceNotSupported`).
 - A finite rule's total occurrence count is ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`).
+- An infinite rule's occurrences from DTSTART to `now + horizon` number ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`).
 
 ## `groundhog_occurrences` — derived index (FR-002 as amended)
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | bigIncrements | |
 | `recurrence_id` | foreignId → recurrences, `cascadeOnDelete` | |
 | `starts_at` | datetime | occurrence start, in model date format / app timezone |
 | `ends_at` | datetime, nullable | start + series duration; `null` when model has no end column |
 
-Indexes: unique `(recurrence_id, starts_at)`.
+Primary key: `(recurrence_id, starts_at)`, no surrogate id. It doubles as the uniqueness rule,
+and on InnoDB it clusters each series' occurrences in start order, so expanding a series reads
+one contiguous range (measured for SC-003: count 0.50 s → 0.36 s on MySQL 8.4).
 Invariant: the content equals the raw rule expansion over `[DTSTART, materialized_until)` (or the
 whole rule when finite). It never reflects exclusions and it is never edited except through
 rebuild/extend.
 
 ## `groundhog_exclusions` — exceptions and cancellations
+
+Spec terms: a row with `exception_id` is an *exception link*; a row without one is a
+*cancellation*. `Index\ExceptionLedger` is the only class that writes this table. In PHP code
+"exception" means an occurrence exception; thrown errors live in `Exceptions\` and are named after
+the failure (`RecurrenceNotSupported::forOccurrenceException`).
 
 | Column | Type | Notes |
 |---|---|---|
@@ -89,9 +97,10 @@ stateDiagram-v2
     [*] --> Plain: create without rule
     [*] --> Series: create with recurrence_rule
     Plain --> Series: assign rule
-    Series --> Plain: set rule null (exceptions detached, FR-022)
-    Series --> Series: change rule / start (exceptions detached, index rebuilt)\nchange duration (index rebuilt)\nchange other attrs (no index change)
-    Series --> [*]: delete (rule, index, exclusions, exceptions removed)
+    Series --> Plain: set rule null (exclusions reset, FR-022)
+    Series --> Series: change rule text / start (exclusions reset, index rebuilt)\nchange duration (index rebuilt)\nchange other attrs or re-assign identical rule (no change)
+    Series --> [*]: hard delete (rule, index, exclusions removed; exceptions force-deleted)
+    Series --> Series: soft delete hides occurrences and exceptions; restore shows them
 
     state "Virtual occurrence" as Virtual
     Series --> Virtual: query expands
@@ -99,8 +108,9 @@ stateDiagram-v2
     Virtual --> Cancelled: delete (exclusion, exception_id null)
     Exception --> Exception: save (in-place update)
     Exception --> Cancelled: hard delete (exception_id → null)
+    Cancelled --> [*]: series rule/start changed (exclusion row deleted, FR-022)
     Exception --> Exception: soft delete hides row, link kept; restore shows it
-    Exception --> Plain: series rule/start changed (exclusion row deleted)
+    Exception --> Plain: series rule/start changed (exclusion row deleted; cancellations discarded too)
 ```
 
 ## Derived semantics (not stored)
@@ -108,5 +118,7 @@ stateDiagram-v2
 - **Occurrence end**: `occurrence start + (series end − series start)`.
 - **Horizon cap**: `(lower bound ?? now) + groundhog.horizon`; applied only to `is_infinite` rules
   and only when the query has no upper bound on start/end.
+- **Materialisation ceiling**: reads never extend the index past `now + groundhog.max_materialization_ahead`;
+  a query that would need it throws `OccurrenceLimitExceeded` before writing.
 - **Occurrence identity**: `(groundhog_series_key, groundhog_original_starts_at)`; unique within a
   model type. `OccurrenceCollection` keys its dictionary by it.
