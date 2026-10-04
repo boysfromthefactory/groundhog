@@ -1,0 +1,112 @@
+# Data Model: Groundhog — Recurring Eloquent Models
+
+Three package tables plus the application's own recurring-model table. Key column types for
+`recurrable_id` and `exception_id` follow Laravel's default morph key type
+(`Schema::morphUsingUuids()` / `morphUsingUlids()`), so joins against the model's primary key
+compare equal types on every supported database.
+
+```mermaid
+erDiagram
+    RECURRING_MODEL ||--o| GROUNDHOG_RECURRENCES : "recurrable (morph)"
+    GROUNDHOG_RECURRENCES ||--o{ GROUNDHOG_OCCURRENCES : "derived index"
+    GROUNDHOG_RECURRENCES ||--o{ GROUNDHOG_EXCLUSIONS : "excluded starts"
+    GROUNDHOG_EXCLUSIONS }o--o| RECURRING_MODEL : "exception_id (same model type)"
+```
+
+## Recurring model record (application table, e.g. `meetings`)
+
+Owned by the application. The package adds no columns.
+
+| Concern | Rule |
+|---|---|
+| Start column | `RECURRENCE_STARTS_AT` constant, default `starts_at`. Datetime, required for series. |
+| End column | `RECURRENCE_ENDS_AT` constant, default `ends_at`; `null` = model has no end. |
+| Role | Derived, never stored: **plain** (no recurrence, no exclusion link), **series** (has a `groundhog_recurrences` row), **exception** (referenced by `groundhog_exclusions.exception_id`). |
+
+Query-time identity attributes (present on rows returned through the occurrence scope, never
+written):
+
+| Attribute | Plain | Series* | Virtual occurrence | Exception |
+|---|---|---|---|---|
+| primary key | own | own | `null` | own |
+| `groundhog_series_key` | `null` | — | series key | series key |
+| `groundhog_original_starts_at` | `null` | — | occurrence start | replaced start |
+| `exists` | true | true | **false** | true |
+
+\* Series rows never appear in expanded results; they are reachable by key (FR-015) or
+`withoutOccurrences()`.
+
+## `groundhog_recurrences` — the rule (FR-003)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigIncrements | |
+| `recurrable_type`, `recurrable_id` | `morphs()` | unique pair: one rule per series |
+| `rule` | text | RFC 5545 text from `RRule::rfcString()`, incl. `DTSTART;TZID=` |
+| `timezone` | string(64) | IANA zone the rule is evaluated in |
+| `is_infinite` | boolean | cached `RRule::isInfinite()`, used by the horizon cap in SQL |
+| `materialized_until` | datetime, nullable | exclusive upper bound of rows present in the index; `null` = finite rule fully materialised |
+| `created_at`, `updated_at` | timestamps | |
+
+Validation (on assignment, before any write; FR-006):
+- Input parses with `new RRule(...)`; any `InvalidArgumentException` → `InvalidRecurrenceRule` with the parser message.
+- Input yields an `RRule`, not an `RSet` (no EXDATE/RDATE lines).
+- The owning record is not an exception (`RecurrenceNotSupported`).
+- The model's start attribute is non-null when saving (`RecurrenceNotSupported`).
+- A finite rule's total occurrence count is ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`).
+
+## `groundhog_occurrences` — derived index (FR-002 as amended)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigIncrements | |
+| `recurrence_id` | foreignId → recurrences, `cascadeOnDelete` | |
+| `starts_at` | datetime | occurrence start, in model date format / app timezone |
+| `ends_at` | datetime, nullable | start + series duration; `null` when model has no end column |
+
+Indexes: unique `(recurrence_id, starts_at)`.
+Invariant: the content equals the raw rule expansion over `[DTSTART, materialized_until)` (or the
+whole rule when finite). It never reflects exclusions and it is never edited except through
+rebuild/extend.
+
+## `groundhog_exclusions` — exceptions and cancellations
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigIncrements | |
+| `recurrence_id` | foreignId → recurrences, `cascadeOnDelete` | |
+| `original_starts_at` | datetime | the generated start being suppressed |
+| `exception_id` | morph-key type, nullable | key of the replacing record (same model type); `null` = cancelled |
+| `created_at`, `updated_at` | timestamps | |
+
+Indexes: unique `(recurrence_id, original_starts_at)` (at most one exception per occurrence);
+index `exception_id`.
+
+## State transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> Plain: create without rule
+    [*] --> Series: create with recurrence_rule
+    Plain --> Series: assign rule
+    Series --> Plain: set rule null (exceptions detached, FR-022)
+    Series --> Series: change rule / start (exceptions detached, index rebuilt)\nchange duration (index rebuilt)\nchange other attrs (no index change)
+    Series --> [*]: delete (rule, index, exclusions, exceptions removed)
+
+    state "Virtual occurrence" as Virtual
+    Series --> Virtual: query expands
+    Virtual --> Exception: save / update / increment (exclusion with exception_id)
+    Virtual --> Cancelled: delete (exclusion, exception_id null)
+    Exception --> Exception: save (in-place update)
+    Exception --> Cancelled: hard delete (exception_id → null)
+    Exception --> Exception: soft delete hides row, link kept; restore shows it
+    Exception --> Plain: series rule/start changed (exclusion row deleted)
+```
+
+## Derived semantics (not stored)
+
+- **Occurrence end**: `occurrence start + (series end − series start)`.
+- **Horizon cap**: `(lower bound ?? now) + groundhog.horizon`; applied only to `is_infinite` rules
+  and only when the query has no upper bound on start/end.
+- **Occurrence identity**: `(groundhog_series_key, groundhog_original_starts_at)`; unique within a
+  model type. `OccurrenceCollection` keys its dictionary by it.
