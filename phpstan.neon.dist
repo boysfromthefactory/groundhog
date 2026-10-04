@@ -1,0 +1,15 @@
+includes:
+    - phpstan-baseline.neon
+
+parameters:
+    level: 9
+    paths:
+        - src
+        - config
+        - database
+        - benchmarks
+        # The trait is only analysed through a class that uses it; the workbench models are those classes.
+        - workbench/app
+    stubFiles:
+        - stubs/RRuleInterface.stub
+    tmpDir: build/phpstan

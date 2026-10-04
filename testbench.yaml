@@ -1,0 +1,10 @@
+providers:
+  - BoysFromTheFactory\Groundhog\GroundhogServiceProvider
+
+migrations:
+  - workbench/database/migrations
+
+workbench:
+  build:
+    - create-sqlite-db
+    - migrate:refresh

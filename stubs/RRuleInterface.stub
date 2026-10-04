@@ -1,0 +1,14 @@
+<?php
+
+namespace RRule;
+
+/**
+ * php-rrule ships without generic annotations; this stub states what it iterates so static
+ * analysis can check callers at level 9 without suppressions.
+ *
+ * @extends \ArrayAccess<int, \DateTime>
+ * @extends \IteratorAggregate<int, \DateTime>
+ */
+interface RRuleInterface extends \ArrayAccess, \Countable, \IteratorAggregate
+{
+}
