@@ -10,6 +10,16 @@ cancels it.
 
 Rules are parsed and expanded by [rlanvin/php-rrule](https://github.com/rlanvin/php-rrule).
 
+## Documentation
+
+The full guide, with examples for every feature, is in the
+[wiki](https://github.com/boysfromthefactory/groundhog/wiki):
+[Quick Start](https://github.com/boysfromthefactory/groundhog/wiki/Quick-Start) ·
+[Usage guide](https://github.com/boysfromthefactory/groundhog/wiki/Declaring-Recurring-Models) ·
+[Configuration](https://github.com/boysfromthefactory/groundhog/wiki/Configuration) ·
+[Errors](https://github.com/boysfromthefactory/groundhog/wiki/Errors) ·
+[Limitations](https://github.com/boysfromthefactory/groundhog/wiki/Limitations)
+
 ## Requirements
 
 - PHP 8.4+, Laravel 13

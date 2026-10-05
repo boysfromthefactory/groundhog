@@ -26,3 +26,9 @@ All notable changes to `Groundhog` will be documented in this file.
 - Migration creating `groundhog_recurrences`, `groundhog_occurrences` and `groundhog_exclusions`.
 - Exceptions `InvalidRecurrenceRule`, `RecurrenceNotSupported`, `OccurrenceLimitExceeded` and
   `IncompatibleEloquentBuilder`.
+
+### Documentation
+
+- [GitHub wiki](https://github.com/boysfromthefactory/groundhog/wiki) with an overview, quick
+  start, usage guide for every feature, configuration, error and limitation reference, and
+  maintainer publishing guide. Sources live in `wiki/`.
