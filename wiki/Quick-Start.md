@@ -7,21 +7,6 @@ steps in order in a Laravel 13 application; each step shows what you should see.
 composer require boysfromthefactory/groundhog
 ```
 
-> **Until the package is on Packagist**, add the GitHub repository to your application's
-> `composer.json` and require the tagged release:
->
-> ```json
-> "repositories": [
->     {"type": "vcs", "url": "https://github.com/boysfromthefactory/groundhog"}
-> ]
-> ```
->
-> ```bash
-> composer require boysfromthefactory/groundhog:^0.1
-> ```
->
-> The repository is public, so no credentials are needed.
-
 ## 2. Publish and run the migration
 
 ```bash
