@@ -2,6 +2,36 @@
 
 All notable changes to `Groundhog` will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- Occurrences are generated per query and never stored. A query loads every series of the model
+  type, expands each rule only for the query's time window and passes the rows to the database as
+  one JSON parameter (SQLite `json_each`, MySQL `JSON_TABLE`, PostgreSQL `json_array_elements`).
+  Far windows work: there is no read ceiling any more.
+- `groundhog.max_occurrences_per_series` now bounds the occurrences one series generates for one
+  query (only occurrences inside the window count); the check on save is unchanged.
+- Changing only a series' duration no longer rebuilds anything; occurrence ends change on the
+  next query.
+- Performance: 1,000 daily series over a one-year window, page of 25 plus total, now takes
+  4.8–7.4 s on SQLite, 7.0–7.9 s on MySQL 8.4 and 6.8–7.1 s on PostgreSQL 18; cost grows with
+  series × occurrences in the window on every query.
+
+### Removed
+
+- Table `groundhog_occurrences` and column `groundhog_recurrences.materialized_until`.
+- Configuration `groundhog.max_materialization_ahead`; queries have no read ceiling.
+
+### Added
+
+- Migration `drop_groundhog_occurrence_index`, published with the `groundhog-migrations` tag. It
+  drops the 0.1 occurrence table and column if present and is a no-op on fresh installs. To
+  upgrade from 0.1, run `php artisan vendor:publish --tag="groundhog-migrations"` and then
+  `php artisan migrate`.
+- `RecurrenceNotSupported` is thrown by expanded queries on drivers other than SQLite, MySQL and
+  PostgreSQL.
+
 ## v0.1.0 - 2026-10-05
 
 ### Added

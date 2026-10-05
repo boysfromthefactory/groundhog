@@ -148,7 +148,7 @@ final class ExceptionLedger
 
         $model->getConnection()->table('groundhog_exclusions')->insert([
             'recurrence_id' => $recurrenceId,
-            // Same representation as the index row it suppresses, so the anti-join matches exactly.
+            // Same representation as the generated occurrence start it suppresses, so the anti-join matches exactly.
             'original_starts_at' => $model->fromDateTime($originalStart->setTimezone(RecurrenceColumns::applicationTimezone())),
             'exception_id' => $exceptionKey,
             'created_at' => $now,

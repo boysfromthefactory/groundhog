@@ -2,8 +2,8 @@
 
 /*
  * SC-003 measurement: with 1,000 daily series and a one-year window, one page of 25
- * occurrences including the total count must take under 1 s on PostgreSQL, 2 s on MySQL and
- * 3 s on SQLite.
+ * occurrences including the total count. Occurrences are generated per query, so the reference
+ * times are 7.5 s on PostgreSQL and SQLite and 8 s on MySQL (spec SC-003); slower is a regression.
  *
  * Wall-clock timings cannot be a deterministic test (Constitution II), so this is a script:
  * `composer bench`. It uses the database from DB_CONNECTION (default: in-memory SQLite) and
@@ -48,14 +48,13 @@ DB::transaction(function () use ($start) {
     }
 });
 
-printf("Seeded %d daily series (%d index rows) in %.1f s on %s\n", SERIES, DB::table('groundhog_occurrences')->count(), microtime(true) - $seeded, DB::connection()->getDriverName());
+printf("Seeded %d daily series in %.1f s on %s\n", SERIES, microtime(true) - $seeded, DB::connection()->getDriverName());
 
 $window = fn () => Meeting::whereBetween('starts_at', [$start, $start->addYear()])->orderBy('starts_at');
 $lastPage = (int) ceil($window()->count() / PER_PAGE);
 $budget = match (DB::connection()->getDriverName()) {
-    'pgsql' => 1.0,
-    'sqlite' => 3.0,
-    default => 2.0,
+    'mysql' => 8.0,
+    default => 7.5,
 };
 $failed = false;
 

@@ -16,21 +16,9 @@ return new class extends Migration
             $table->text('rule');
             $table->string('timezone', 64);
             $table->boolean('is_infinite');
-            // Exclusive upper bound of the rows present in the index; null = finite rule fully materialised.
-            $table->dateTime('materialized_until')->nullable();
             $table->timestamps();
 
             $table->unique(['recurrable_type', 'recurrable_id']);
-        });
-
-        Schema::create('groundhog_occurrences', function (Blueprint $table) {
-            $table->foreignId('recurrence_id')->constrained('groundhog_recurrences')->cascadeOnDelete();
-            $table->dateTime('starts_at');
-            $table->dateTime('ends_at')->nullable();
-
-            // A composite primary key clusters each series' occurrences in start order (InnoDB),
-            // so expanding a series reads one contiguous range instead of a lookup per row.
-            $table->primary(['recurrence_id', 'starts_at']);
         });
 
         Schema::create('groundhog_exclusions', function (Blueprint $table) {
@@ -56,7 +44,6 @@ return new class extends Migration
     public function down(): void
     {
         Schema::dropIfExists('groundhog_exclusions');
-        Schema::dropIfExists('groundhog_occurrences');
         Schema::dropIfExists('groundhog_recurrences');
     }
 };

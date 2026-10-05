@@ -2,7 +2,7 @@
 
 namespace BoysFromTheFactory\Groundhog\Query;
 
-use BoysFromTheFactory\Groundhog\Index\OccurrenceIndex;
+use BoysFromTheFactory\Groundhog\Rules\OccurrenceGenerator;
 use BoysFromTheFactory\Groundhog\Support\RecurrenceColumns;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -13,7 +13,8 @@ use Illuminate\Database\Query\JoinClause;
 
 /**
  * Replaces a recurring model's table with a derived table of the same name in which every
- * series row is replaced by its occurrences (research R4).
+ * series row is replaced by its occurrences, generated afresh each time the scope is applied
+ * (research R4).
  *
  * Because the derived table is aliased as the model's own table, every ordinary Eloquent read
  * (constraints, joins, whereHas, ordering, aggregates, pagination counts) runs unchanged in SQL
@@ -66,11 +67,8 @@ final class OccurrenceScope implements Scope
         $window = TimeWindow::fromQuery($query, $columns->start, $columns->end, $alias);
 
         $cap = $window->upperStart() === null
-            ? ($window->horizonBase() ?? CarbonImmutable::now())->add(OccurrenceIndex::horizon())
+            ? ($window->horizonBase() ?? CarbonImmutable::now())->add(OccurrenceGenerator::horizon())
             : null;
-
-        // Index rows are needed for every start up to and including the upper bound.
-        OccurrenceIndex::ensureMaterialized($model, $window->upperStart()?->addSecond() ?? $cap ?? CarbonImmutable::now());
 
         $query->fromSub($this->derivedTable($model, $columns, $window, $cap), $alias);
 
@@ -146,25 +144,35 @@ final class OccurrenceScope implements Scope
         $query->addSelect([$alias.'.'.self::SERIES_KEY, $alias.'.'.self::ORIGINAL_START]);
     }
 
+    /**
+     * Stored rows that are not series, followed by the occurrences of every series. Separate
+     * branches let each one be driven from the side that is cheap to join: the occurrence rows
+     * reach their series by primary key, which no database can do for a join in the other
+     * direction against an unindexed JSON table.
+     */
     private function derivedTable(Model $model, RecurrenceColumns $columns, TimeWindow $window, ?CarbonImmutable $cap): QueryBuilder
+    {
+        return $this->storedRows($model)->unionAll($this->occurrenceRows($model, $columns, $window, $cap));
+    }
+
+    /**
+     * Plain records and exceptions, each with the identity attributes of its exception link.
+     */
+    private function storedRows(Model $model): QueryBuilder
     {
         $keyName = $model->getKeyName();
         $deletedAt = self::deletedAtColumnOf($model);
         $select = [];
 
         foreach (self::columnsOf($model) as $column) {
-            $select[] = match ($column) {
-                $keyName => new IdentifierSql('case when %s is null then %s end as %s', ['gh_o.recurrence_id', 'gh_m.'.$column, $column]),
-                $columns->start => new IdentifierSql('coalesce(%s, %s) as %s', ['gh_o.starts_at', 'gh_m.'.$column, $column]),
-                $columns->end => new IdentifierSql('coalesce(%s, %s) as %s', ['gh_o.ends_at', 'gh_m.'.$column, $column]),
+            $select[] = $column === $deletedAt
                 // An exception of a trashed series is hidden with it and returns on restore (FR-023).
-                $deletedAt => new IdentifierSql('coalesce(%s, %s) as %s', ['gh_m.'.$column, 'gh_s.'.$column, $column]),
-                default => 'gh_m.'.$column,
-            };
+                ? new IdentifierSql('coalesce(%s, %s) as %s', ['gh_m.'.$column, 'gh_s.'.$column, $column])
+                : 'gh_m.'.$column;
         }
 
-        $select[] = new IdentifierSql('case when %s is not null then %s else %s end as %s', ['gh_o.recurrence_id', 'gh_r.recurrable_id', 'gh_xl.series_key', self::SERIES_KEY]);
-        $select[] = new IdentifierSql('coalesce(%s, %s) as %s', ['gh_o.starts_at', 'gh_xl.original_starts_at', self::ORIGINAL_START]);
+        $select[] = 'gh_xl.series_key as '.self::SERIES_KEY;
+        $select[] = 'gh_xl.original_starts_at as '.self::ORIGINAL_START;
 
         // The type filter sits inside the subquery: a plain join on exception_id would duplicate
         // a row whenever exceptions of two model types share a key value.
@@ -175,54 +183,53 @@ final class OccurrenceScope implements Scope
             ->whereNotNull('gh_xe.exception_id')
             ->select(['gh_xe.exception_id', 'gh_xe.original_starts_at', 'gh_re.recurrable_id as series_key']);
 
-        // Joins that depend only on the stored row come first, so they run once per record
-        // rather than once per occurrence (left joins keep their written order).
-        $derived = $model->getConnection()->query()
+        $stored = $model->getConnection()->query()
             ->from($model->getTable().' as gh_m')
             ->select($select)
             ->leftJoinSub($exceptionLinks, 'gh_xl', 'gh_xl.exception_id', '=', 'gh_m.'.$keyName);
 
         if ($deletedAt !== null) {
-            $derived->leftJoin($model->getTable().' as gh_s', 'gh_s.'.$keyName, '=', 'gh_xl.series_key');
+            $stored->leftJoin($model->getTable().' as gh_s', 'gh_s.'.$keyName, '=', 'gh_xl.series_key');
         }
 
-        $derived
+        return $stored
             ->leftJoin('groundhog_recurrences as gh_r', function (JoinClause $join) use ($model, $keyName) {
                 $join->where('gh_r.recurrable_type', '=', $model->getMorphClass())
                     ->on('gh_r.recurrable_id', '=', 'gh_m.'.$keyName);
             })
-            ->leftJoin('groundhog_occurrences as gh_o', function (JoinClause $join) use ($model, $window) {
-                $join->on('gh_o.recurrence_id', '=', 'gh_r.id');
+            ->whereNull('gh_r.id');
+    }
 
-                // The user's own predicates imply these bounds; repeating them on the join lets
-                // databases without derived-table predicate push-down use the index.
-                if ($window->lowerStart() !== null) {
-                    $join->where('gh_o.starts_at', '>=', $model->fromDateTime($window->lowerStart()));
-                }
+    /**
+     * One row per occurrence that is not excluded: the series' values with the occurrence's
+     * start and end, no key, and the series key and original start as identity attributes.
+     */
+    private function occurrenceRows(Model $model, RecurrenceColumns $columns, TimeWindow $window, ?CarbonImmutable $cap): QueryBuilder
+    {
+        $select = [];
 
-                if ($window->upperStart() !== null) {
-                    $join->where('gh_o.starts_at', '<=', $model->fromDateTime($window->upperStart()));
-                }
-            })
+        foreach (self::columnsOf($model) as $column) {
+            $select[] = match ($column) {
+                $model->getKeyName() => new IdentifierSql('null as %s', [$column]),
+                $columns->start => 'gh_o.starts_at as '.$column,
+                $columns->end => 'gh_o.ends_at as '.$column,
+                default => 'gh_m.'.$column,
+            };
+        }
+
+        $select[] = 'gh_r.recurrable_id as '.self::SERIES_KEY;
+        $select[] = 'gh_o.starts_at as '.self::ORIGINAL_START;
+
+        return $model->getConnection()->query()
+            ->fromSub(OccurrenceRows::forQuery($model, $window, $cap), 'gh_o')
+            ->select($select)
+            ->join('groundhog_recurrences as gh_r', 'gh_r.id', '=', 'gh_o.recurrence_id')
+            ->join($model->getTable().' as gh_m', 'gh_m.'.$model->getKeyName(), '=', 'gh_r.recurrable_id')
             ->leftJoin('groundhog_exclusions as gh_xo', function (JoinClause $join) {
                 $join->on('gh_xo.recurrence_id', '=', 'gh_o.recurrence_id')
                     ->on('gh_xo.original_starts_at', '=', 'gh_o.starts_at');
-            });
-
-        return $derived->where(function (QueryBuilder $rows) use ($model, $cap) {
-            $rows->whereNull('gh_r.id')->orWhere(function (QueryBuilder $occurrences) use ($model, $cap) {
-                $occurrences->whereNotNull('gh_o.recurrence_id')->whereNull('gh_xo.recurrence_id');
-
-                // The horizon is a predicate, not a property of what happens to be indexed, so
-                // results never depend on which queries ran before (determinism).
-                if ($cap !== null) {
-                    $occurrences->where(function (QueryBuilder $capped) use ($model, $cap) {
-                        $capped->whereRaw(new IdentifierSql('not %s', ['gh_r.is_infinite']))
-                            ->orWhere('gh_o.starts_at', '<', $model->fromDateTime($cap));
-                    });
-                }
-            });
-        });
+            })
+            ->whereNull('gh_xo.recurrence_id');
     }
 
     /**

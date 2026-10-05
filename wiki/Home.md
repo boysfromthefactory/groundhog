@@ -35,7 +35,10 @@ It is not the right tool when you need:
 - "this and all following occurrences" edits (splitting a series);
 - explicit extra dates (RDATE) or excluded dates written into the rule (EXDATE);
 - iCalendar (`.ics`) import or export;
-- SQL Server, or cursor pagination.
+- SQL Server, or cursor pagination;
+- fast queries over thousands of series and long windows: occurrences are generated on every
+  query, so cost grows with the occurrences in the window (see
+  [Performance](How-It-Works#performance)).
 
 See [Limitations](Limitations) for these and their workarounds.
 

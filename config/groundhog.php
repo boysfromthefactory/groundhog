@@ -21,26 +21,13 @@ return [
     | Per-series generation limit (SC-005)
     |--------------------------------------------------------------------------
     |
-    | The maximum number of occurrences a single generation pass may produce for
-    | one series. A rule or query that needs more fails with
-    | OccurrenceLimitExceeded instead of exhausting time or memory.
+    | The maximum number of occurrences one series may generate for one query,
+    | or on save (a finite rule in full, an infinite rule up to now + horizon).
+    | A rule or query that needs more fails with OccurrenceLimitExceeded instead
+    | of exhausting time or memory.
     |
     */
 
     'max_occurrences_per_series' => 50000,
-
-    /*
-    |--------------------------------------------------------------------------
-    | Materialisation ceiling (FR-008)
-    |--------------------------------------------------------------------------
-    |
-    | ISO-8601 duration measured from now. Reads extend the stored occurrence
-    | index on demand; this bounds how far ahead a single query may make it
-    | generate, so request input cannot trigger unbounded writes. A query that
-    | would need occurrences beyond it fails with OccurrenceLimitExceeded.
-    |
-    */
-
-    'max_materialization_ahead' => 'P10Y',
 
 ];

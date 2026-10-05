@@ -60,7 +60,7 @@ criterion. Clock-dependent scenarios freeze time with `travelTo()`.
 | 14 | Force-delete / soft-delete + restore series (US4-4, FR-023) | all rows gone, incl. trashed exceptions / hidden / back |
 | 15 | `Meeting::find($seriesId)` and route binding (FR-015) | stored series record |
 | 16 | `Meeting::where(...)->update([...])` (FR-026) | stored rows only; no exclusions created |
-| 17 | Minutely rule on save; daily series queried to 2034 with limit 1000; query beyond `max_materialization_ahead` (SC-005, FR-008) | `OccurrenceLimitExceeded` each time; no index rows written beyond the existing range |
+| 17 | Minutely rule on save; daily series queried to 2034 with limit 1000; daily series counted over January 2040 with limit 1000 (SC-005, FR-008) | `OccurrenceLimitExceeded` on save and for the 2034 query; the January 2040 count is 31 |
 | 18 | Europe/Budapest series across DST (FR-011) | 09:00 local before and after 29 Mar 2026 |
 | 19 | Plain record in the March window (US1-3) | returned once, `exists === true` |
 | 20 | `where('location', 'Room A')` with a series in Room A (US1-4) | constraint evaluated per occurrence |
@@ -81,6 +81,8 @@ composer bench
 `composer bench` runs `benchmarks/pagination.php`, a measurement script outside the Pest suite:
 its wall-clock check cannot be deterministic, so it is not a test. It seeds 1,000 daily series
 and times `whereBetween('starts_at', [start, start + 1 year])->orderBy('starts_at')->paginate(25)`
-for page 1, page 200 and the last page, after the index has been built. Pass: each page incl.
-total < 1 s on PostgreSQL, < 2 s on MySQL and < 3 s on SQLite, on a machine with ≥ 4 CPU cores
-and 16 GB RAM running the database locally; report the timings and the machine in the PR.
+for page 1, page 200 and the last page. Every query generates its occurrences, so there is no
+warm-up. Reference (SC-003 as amended 2026-10-05; Apple-silicon development machine, PHP 8.5,
+local databases): SQLite 3.45 4.8–7.4 s, MySQL 8.4 7.0–7.9 s, PostgreSQL 18 6.8–7.1 s per page
+incl. total. The script fails when a page exceeds the SC-003 budget (7.5 s on SQLite and
+PostgreSQL, 8 s on MySQL). Report the timings and the machine in the PR.

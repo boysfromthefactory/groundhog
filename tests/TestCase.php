@@ -12,8 +12,8 @@ class TestCase extends Orchestra
     {
         parent::setUp();
 
-        // Saving an infinite series materialises occurrences up to now + horizon, so every test
-        // runs at a fixed instant; tests that need another one call travelTo() themselves.
+        // Open-ended queries and save-time limit checks measure the horizon from now, so every
+        // test runs at a fixed instant; tests that need another one call travelTo() themselves.
         $this->travelTo(Carbon::parse('2026-03-01 00:00:00'));
     }
 

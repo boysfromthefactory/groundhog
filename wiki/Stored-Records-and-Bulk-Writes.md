@@ -103,7 +103,7 @@ Meeting::upsert([['id' => $id, 'title' => 'Upserted', 'starts_at' => '2026-04-01
 
 To change or cancel a single occurrence, load it and call `save()`, `update()` or `delete()` on the model; see [Editing Occurrences](Editing-Occurrences) and [Cancelling Occurrences](Cancelling-Occurrences).
 
-Warning: bulk-deleting series rows bypasses the cleanup of their rules, just as Eloquent bulk deletes bypass model events. A query-level `delete()` or `forceDelete()` on a series row leaves its rule, occurrence index and exceptions behind. Delete series one model at a time, as described in [Managing a Series](Managing-a-Series#deleting-a-series). See [Limitations](Limitations).
+Warning: bulk-deleting series rows bypasses the cleanup of their rules, just as Eloquent bulk deletes bypass model events. A query-level `delete()` or `forceDelete()` on a series row leaves its rule, exclusions and exceptions behind. Delete series one model at a time, as described in [Managing a Series](Managing-a-Series#deleting-a-series). See [Limitations](Limitations).
 
 ## Roles of stored records
 

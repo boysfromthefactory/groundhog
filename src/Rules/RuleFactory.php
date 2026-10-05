@@ -45,7 +45,7 @@ final class RuleFactory
         $timezone = is_string($input) ? self::timezoneOfText($input) : self::timezoneOfParts($parts);
 
         $dtstart = DateTime::createFromInterface($seriesStart)->setTimezone(new DateTimeZone($timezone ?? $defaultTimezone));
-        // rfcString() keeps whole seconds only; dropping sub-seconds here keeps stored text and index in step.
+        // rfcString() keeps whole seconds only; dropping sub-seconds here keeps stored text and generated starts in step.
         $dtstart->setTime((int) $dtstart->format('H'), (int) $dtstart->format('i'), (int) $dtstart->format('s'));
         $parts['DTSTART'] = $dtstart;
 

@@ -7,8 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 use RuntimeException;
 
 /**
- * Thrown instead of exhausting time, memory or storage when a rule or query would generate
- * more occurrences than the configured limits allow (SC-005, FR-008).
+ * Thrown instead of exhausting time or memory when a rule or query would generate more
+ * occurrences for one series than the configured limit allows (SC-005).
  */
 final class OccurrenceLimitExceeded extends RuntimeException
 {
@@ -26,19 +26,6 @@ final class OccurrenceLimitExceeded extends RuntimeException
             $limit,
             $from?->toIso8601String() ?? 'its start',
             $until?->toIso8601String() ?? 'its end',
-        ));
-    }
-
-    /**
-     * A read would extend the occurrence index beyond `now + groundhog.max_materialization_ahead`.
-     */
-    public static function beyondMaterializationCeiling(string $morphClass, CarbonInterface $until, CarbonInterface $ceiling): self
-    {
-        return new self(sprintf(
-            'Querying %s occurrences up to %s requires generating beyond the materialisation ceiling %s; constrain the query or raise groundhog.max_materialization_ahead.',
-            $morphClass,
-            $until->toIso8601String(),
-            $ceiling->toIso8601String(),
         ));
     }
 }

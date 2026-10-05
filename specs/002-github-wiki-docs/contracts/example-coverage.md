@@ -57,7 +57,7 @@ Test files: `Cast` = `tests/Feature/RecurrenceRuleCastTest.php`, `Query` =
 | Detached next to new occurrence | Series | both returned | Life › returns a detached exception next to a new occurrence … |
 | Same rule again | Series | nothing changes | Life › changes nothing when the identical rule is assigned again |
 | Duration only | Series | ends move; exceptions and cancellations kept | Life › keeps exceptions and cancellations when only the duration changes |
-| Force-delete series | Series | rule, occurrences, exceptions removed | Life › removes the rule, index, exclusions and exceptions … (US4-4) |
+| Force-delete series | Series | rule, exclusions, exceptions removed | Life › removes the rule, exclusions and exceptions when the series is force-deleted (US4-4) |
 | Soft-delete / restore series | Series | hidden; back on restore | Life › hides and restores a soft-deleted series … |
 | `newCollection()` set operations | Pagination | `unique`/`merge`/`diff`/`intersect` keep 11 | Page › keeps occurrences distinct in collection set operations |
 | Collection `find()` with an occurrence | Pagination | finds that occurrence | **NEW** Page › finds a virtual occurrence in a collection by the occurrence itself |
@@ -100,12 +100,12 @@ Test files: `Cast` = `tests/Feature/RecurrenceRuleCastTest.php`, `Query` =
 | Capability | Page | Stated outcome | Check |
 |---|---|---|---|
 | `horizon` | Configuration | `P1M` → 31 | Query › honours a configured horizon length |
-| `max_occurrences_per_series` | Configuration, Errors | over-long rule rejected on save; far query throws | Cast › refuses a finite rule …; Cast › refuses an infinite rule too dense …; Edge › fails instead of generating past the per-series limit … |
-| `max_materialization_ahead` | Configuration, Errors | throws only when generation is needed | Edge › fails instead of generating past the materialisation ceiling; … applies the ceiling only when … |
+| `max_occurrences_per_series` | Configuration, Errors, Limitations | over-long rule rejected on save; query over the limit in its window throws; narrow far window → 31 | Cast › refuses a finite rule …; Cast › refuses an infinite rule too dense …; Edge › fails instead of generating past the per-series limit on a far query; Edge › counts only the queried window against the per-series limit |
 | Missing start | Errors | `RecurrenceNotSupported` | Cast › refuses to save a series without a start |
 | Rule persisted by `saveQuietly()` | Rules | rule stored | Cast › persists the rule on saveQuietly() |
-| Install, publish, migrate | Quick Start | tags publish config and migration; tables created | **V-3** fresh-application walkthrough |
-| SC-003 performance | How It Works | per-database budgets | **V-6** `composer bench` results recorded in the 001 spec amendment |
+| Install, publish, migrate | Quick Start | tags publish config and both migrations; two tables created | **V-3** fresh-application walkthrough |
+| Upgrade from 0.1 (publish + migrate drops the occurrence table and column) | Quick Start | old table and column gone | No test; `database/migrations/drop_groundhog_occurrence_index.php.stub` (drops only if present) |
+| SC-003 performance | How It Works, Limitations | measured per-database times (4.8–7.4 s / 7.0–7.9 s / 6.8–7.1 s) | **V-6** `composer bench` results recorded in the 001 spec amendment |
 
 ## Review pass (T023)
 
@@ -113,7 +113,9 @@ Statements found in the pages during review that are not behaviour outcomes of a
 
 | Statement | Page | Evidence |
 |---|---|---|
-| Rendered exception messages (`InvalidRecurrenceRule`, `RecurrenceNotSupported`, `OccurrenceLimitExceeded` incl. the far-query and ceiling timestamps) | Errors, Recurrence Rules | Smoke run of each trigger against the suite's fixtures on 2026-10-05 printed the exact texts on the page; messages are deliberately not pinned by tests (Constitution III: no message-wording tests) |
+| Rendered exception messages (`InvalidRecurrenceRule`, `RecurrenceNotSupported`, `OccurrenceLimitExceeded` incl. the far-query window) | Errors, Recurrence Rules | Smoke run of each trigger against the suite's fixtures on 2026-10-05 printed the exact texts on the page; messages are deliberately not pinned by tests (Constitution III: no message-wording tests) |
+| Unsupported database driver → `RecurrenceNotSupported` (`forDatabaseDriver`) | Errors, Limitations, How It Works | No test (the suite runs on supported drivers only); `src/Query/OccurrenceRows.php` `default => throw RecurrenceNotSupported::forDatabaseDriver($driver)` |
+| Per-query generation (union of stored rows and JSON occurrence rows; generation window) | How It Works | `src/Query/OccurrenceScope.php`, `src/Query/OccurrenceRows.php`; behaviour covered by the Query/Edge rows above |
 | JSON of a virtual occurrence (field order and formats) | Identifying | Same smoke run, `toArray()` of the 9 March occurrence on SQLite |
 | `humanReadable()` locale defaults to PHP's, not Laravel's | Recurrence Rules | php-rrule `RRule::humanReadable()` source (`Locale::getDefault()` / `setlocale`) |
 | Tie-breakers skipped for grouped, distinct and union queries; grouped rows are partial | Pagination, How It Works | `src/Query/OccurrenceScope.php` `breakOrderingTies()` / `keepIdentityColumns()`; 001 query-semantics contract |

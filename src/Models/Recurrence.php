@@ -2,14 +2,13 @@
 
 namespace BoysFromTheFactory\Groundhog\Models;
 
-use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 /**
  * The stored rule of one series (`groundhog_recurrences`). Applications should change rules
- * through the recurring model's `recurrence_rule` attribute, which keeps the occurrence index
- * and exclusions consistent; this model is public for relationships and inspection only.
+ * through the recurring model's `recurrence_rule` attribute, which keeps the exclusions
+ * consistent; this model is public for relationships and inspection only.
  *
  * @property int $id
  * @property string $recurrable_type
@@ -17,7 +16,6 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
  * @property string $rule RFC 5545 text from RRule::rfcString(), including DTSTART;TZID=
  * @property string $timezone
  * @property bool $is_infinite
- * @property CarbonImmutable|null $materialized_until exclusive upper bound of indexed starts; null = finite rule fully indexed
  */
 class Recurrence extends Model
 {
@@ -32,7 +30,6 @@ class Recurrence extends Model
     {
         return [
             'is_infinite' => 'boolean',
-            'materialized_until' => 'immutable_datetime',
         ];
     }
 

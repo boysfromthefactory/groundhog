@@ -218,6 +218,6 @@ Meeting::find($series->id)->recurrence;
 // => null
 ```
 
-Use the relation for reading only, for example to display or export the rule text. Change rules through `recurrence_rule`: it validates the input and keeps the occurrence index, exceptions and cancellations consistent, which writing to the `Recurrence` model directly does not.
+Use the relation for reading only, for example to display or export the rule text. Change rules through `recurrence_rule`: it validates the input and keeps exceptions and cancellations consistent, which writing to the `Recurrence` model directly does not.
 
 Next: [Querying Occurrences](Querying-Occurrences)

@@ -183,8 +183,8 @@ working navigation and links, and repeating it after an edit updates only the ch
 - **FR-010**: The documentation MUST include a limitations page listing every known limitation and
   unsupported feature with its recommended workaround, consistent with the README caveats.
 - **FR-011**: The documentation MUST include a page explaining how the package works at a level
-  sufficient to reason about results and performance (expansion into occurrences, the stored
-  occurrence index, exclusions, horizon and limits), including the measured performance per
+  sufficient to reason about results and performance (expansion into occurrences, per-query
+  generation, exclusions, horizon and limits), including the measured performance per
   supported database.
 
 **Navigation, format and maintenance**

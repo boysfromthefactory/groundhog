@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Model;
  * A recurring model's declared start/end columns and the values read from them.
  *
  * Read from the class constants rather than through trait methods so that the scope, the
- * index and the trait share one implementation that is statically typed against any Model.
+ * occurrence rows and the trait share one implementation that is statically typed against any Model.
  *
  * @internal
  */

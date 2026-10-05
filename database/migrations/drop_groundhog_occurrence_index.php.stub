@@ -1,0 +1,22 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+// Upgrades installations created by Groundhog 0.1, which stored a derived occurrence index.
+// Occurrences are now generated per query; on newer installations this changes nothing.
+// There is no down(): the index held only derived rows, and current code never reads it.
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::dropIfExists('groundhog_occurrences');
+
+        if (Schema::hasColumn('groundhog_recurrences', 'materialized_until')) {
+            Schema::table('groundhog_recurrences', function (Blueprint $table) {
+                $table->dropColumn('materialized_until');
+            });
+        }
+    }
+};

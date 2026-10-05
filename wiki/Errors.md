@@ -68,13 +68,22 @@ Meeting::whereBetween('starts_at', ['2026-03-01', '2026-03-31 23:59:59'])->chunk
 
 **Fix:** use `chunk()` or `lazy()` to iterate occurrences. Use `Meeting::withoutOccurrences()->chunkById(...)` to iterate stored rows only. See [Chunking and lazy iteration](Pagination-and-Collections#chunking-and-lazy-iteration).
 
+**Cause: an expanded query on an unsupported database driver.** Groundhog passes the generated occurrences to the database as one JSON parameter and unpacks it with the database's JSON table function, which it implements for SQLite, MySQL and PostgreSQL only. Any query that expands occurrences on another driver, such as SQL Server, throws:
+
+```php
+Meeting::count();
+// => RecurrenceNotSupported: Cannot expand occurrences on the "sqlsrv" database driver; Groundhog supports sqlite, mysql and pgsql.
+```
+
+**Fix:** use SQLite, MySQL or PostgreSQL. `Meeting::withoutOccurrences()` queries stored rows only and does not expand.
+
 ## OccurrenceLimitExceeded
 
 **Extends:** `RuntimeException`
 
-A rule or query would generate more occurrences than the configured limits allow. Groundhog throws this exception instead of using unbounded time, memory or storage.
+A rule or query would generate more occurrences than the configured limit allows. Groundhog throws this exception instead of using unbounded time or memory.
 
-**Cause: one generation pass for one series exceeds [max_occurrences_per_series](Configuration#max_occurrences_per_series).** This happens on save when a finite rule is too long, or when an infinite rule is too dense to fit up to now plus the horizon. It also happens on a query that would need more new occurrences of one series than the limit. A rejected save stores nothing; a rejected query does not extend the index.
+**Cause: one series generates more occurrences than [max_occurrences_per_series](Configuration#max_occurrences_per_series).** This happens on save when a finite rule is too long, or when an infinite rule is too dense to fit up to now plus the horizon. It also happens on a query whose window holds more occurrences of one series than the limit. A rejected save stores nothing.
 
 ```php
 config(['groundhog.max_occurrences_per_series' => 10]);
@@ -90,20 +99,9 @@ Meeting::create([
 
 The record is inserted before its rule is generated, so the message shows the key it would have had (here 1); the whole save is then rolled back.
 
-With the default limit of 50,000, `'recurrence_rule' => 'FREQ=MINUTELY'` fails in the same way on save. For a query, the message names the stored series key and the range being generated, for example `... App\Models\Meeting [1] generates more than 1000 occurrences between 2027-03-01T00:00:00+00:00 and 2034-01-01T00:00:01+00:00; ...`.
+With the default limit of 50,000, `'recurrence_rule' => 'FREQ=MINUTELY'` fails in the same way on save. For a query, the message names the stored series key and the window being generated, for example `... App\Models\Meeting [1] generates more than 1000 occurrences between its start and 2034-01-01T...; ...` for `Meeting::where('starts_at', '<', '2034-01-01 00:00:00')->count()` on a daily series with the limit lowered to 1000. Only occurrences inside the query's window count, so a narrow window far in the future is not rejected.
 
-**Fix:** narrow the rule (a lower frequency, `COUNT` or `UNTIL`), give the query a nearer upper bound, or raise `groundhog.max_occurrences_per_series`.
-
-**Cause: a read beyond [max_materialization_ahead](Configuration#max_materialization_ahead).** A query would have to extend the stored index of an infinite rule past now plus the ceiling. Assuming today is 1 March 2026 and the ceiling is `'P2Y'`, with a daily series that never ends:
-
-```php
-Meeting::where('starts_at', '<', '2030-06-01 00:00:00')->count();
-// => OccurrenceLimitExceeded: Querying App\Models\Meeting occurrences up to 2030-06-01T00:00:01+00:00 requires generating beyond the materialisation ceiling 2028-03-01T00:00:00+00:00; constrain the query or raise groundhog.max_materialization_ahead.
-```
-
-The first part of the message shows the model's morph class. That is the class name unless you use a morph map.
-
-**Fix:** constrain the query to a nearer upper bound, or raise `groundhog.max_materialization_ahead`. Queries that need no new occurrences, such as those that touch only finite rules, are never rejected by the ceiling.
+**Fix:** narrow the rule (a lower frequency, `COUNT` or `UNTIL`), narrow the query's window, or raise `groundhog.max_occurrences_per_series`.
 
 ## IncompatibleEloquentBuilder
 

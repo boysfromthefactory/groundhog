@@ -71,7 +71,7 @@ A detached exception and a new occurrence can fall at the same time. With a dail
 
 ## Changing only the duration
 
-Changing only the end column keeps the rule and the start, so exceptions and cancellations stay. The ends of the occurrences move.
+Changing only the end column keeps the rule and the start, so exceptions and cancellations stay. The ends of the occurrences move on the next query.
 
 ```php
 $series->update(['ends_at' => '2026-03-02 11:00:00']);
@@ -104,7 +104,7 @@ See [Recurrence Rules](Recurrence-Rules#replacing-and-removing-a-rule) for rule 
 
 ## Deleting a series
 
-`forceDelete()` on the series removes its rule, its occurrence index, its exclusions and every exception, including soft-deleted ones. Each removed exception fires the `deleted` event.
+`forceDelete()` on the series removes its rule, its exclusions and every exception, including soft-deleted ones. Each removed exception fires the `deleted` event.
 
 ```php
 $trashed = Meeting::whereBetween('starts_at', ['2026-03-23 00:00:00', '2026-03-23 23:59:59'])->sole();

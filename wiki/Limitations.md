@@ -40,9 +40,9 @@ A recurring model's custom Eloquent builder must extend `BoysFromTheFactory\Grou
 
 **Workaround:** use `paginate()` or `simplePaginate()`. Both work on occurrences and give a stable order when the query has at least one `orderBy`. See [Pagination](Pagination-and-Collections#pagination).
 
-## SQL Server is not supported
+## Only SQLite, MySQL and PostgreSQL are supported
 
-Groundhog supports SQLite 3.35+, MySQL 8.4 and PostgreSQL 14+. SQL Server is not supported.
+Groundhog supports SQLite 3.35+, MySQL 8.4 and PostgreSQL 14+. Occurrences reach the database as one JSON parameter unpacked by the database's JSON table function, which Groundhog implements for these three only. SQLite needs its JSON functions: built in since 3.38, and compiled into PHP's bundled SQLite for earlier versions. An expanded query on any other driver, such as SQL Server, throws [RecurrenceNotSupported](Errors#recurrencenotsupported).
 
 **Workaround:** none within Groundhog. Use one of the supported databases for the tables of recurring models.
 
@@ -65,7 +65,7 @@ The query returns the virtual occurrence, or the stored exception if the occurre
 
 ## Bulk deletes of series rows bypass cleanup
 
-When a series model is deleted, Groundhog removes its rule, its stored occurrences and its exceptions. A query-level delete such as `Meeting::withoutOccurrences()->where('title', 'Standup')->delete()` runs no model events, just as with any Eloquent bulk delete. Groundhog's cleanup does not run, and the rule rows are left behind.
+When a series model is deleted, Groundhog removes its rule, its exclusions and its exceptions. A query-level delete such as `Meeting::withoutOccurrences()->where('title', 'Standup')->delete()` runs no model events, just as with any Eloquent bulk delete. Groundhog's cleanup does not run, and the rule rows are left behind.
 
 **Workaround:** delete series one model at a time, so the model events run:
 
@@ -75,11 +75,17 @@ Meeting::withoutOccurrences()->where('title', 'Standup')->get()->each->delete();
 
 See [Deleting a series](Managing-a-Series#deleting-a-series) and [Query-level writes](Stored-Records-and-Bulk-Writes#query-level-writes).
 
-## Dense rules and the materialisation ceiling
+## Dense rules
 
-A series whose rule generates more than [max_occurrences_per_series](Configuration#max_occurrences_per_series) occurrences between its start and the horizon is rejected on save. With the default of 50,000, a `FREQ=MINUTELY` rule is rejected. A read that would need occurrences beyond [max_materialization_ahead](Configuration#max_materialization_ahead) after now throws [OccurrenceLimitExceeded](Errors#occurrencelimitexceeded).
+A series whose rule generates more than [max_occurrences_per_series](Configuration#max_occurrences_per_series) occurrences between its start and the horizon is rejected on save. With the default of 50,000, a `FREQ=MINUTELY` rule is rejected. A query whose window holds more than that many occurrences of one series throws [OccurrenceLimitExceeded](Errors#occurrencelimitexceeded).
 
-**Workaround:** use a less dense rule, or add `COUNT` or `UNTIL`. Give far queries a nearer upper bound. If your application really needs more, raise the two config values.
+**Workaround:** use a less dense rule, or add `COUNT` or `UNTIL`. Give far-reaching queries a narrower window. If your application really needs more, raise the config value.
+
+## Every query generates its occurrences
+
+Groundhog stores nothing derived from a rule, so every expanded query loads all series of the model type and generates their occurrences for its window. The cost grows with the number of series times the occurrences each has in the window, on every query, and `paginate()` generates twice (count and page). With 1,000 daily series and a one-year window, a page of 25 with its total takes about 5 to 8 seconds; see [Performance](How-It-Works#performance).
+
+**Workaround:** give queries narrow time bounds, and use `withoutOccurrences()` when you only need stored rows.
 
 ## cursor() identity
 

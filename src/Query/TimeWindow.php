@@ -39,10 +39,17 @@ final class TimeWindow
         return new self($bounds['lowerStart'], $bounds['upperStart'], $bounds['lowerEnd']);
     }
 
-    /** Earliest start any matching occurrence can have, if the query implies one. */
-    public function lowerStart(): ?CarbonImmutable
+    /**
+     * Earliest start a matching occurrence lasting `$duration` seconds can have: the lower start
+     * bound, raised to a lower end bound minus the duration (end = start + duration).
+     */
+    public function lowerStartFor(?int $duration): ?CarbonImmutable
     {
-        return $this->lowerStart;
+        if ($this->lowerEnd === null || $duration === null) {
+            return $this->lowerStart;
+        }
+
+        return self::later($this->lowerStart, $this->lowerEnd->subSeconds($duration));
     }
 
     /** Latest start any matching occurrence can have, if the query implies one. */

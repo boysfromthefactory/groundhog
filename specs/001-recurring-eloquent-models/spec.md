@@ -47,10 +47,9 @@
 - Platform: build from `spatie/package-skeleton-laravel` and target the latest Laravel (13.x).
 - The trait MUST provide a cast that exposes the stored rule as an `RRule\RRule` object, so
   `humanReadable()` and every `RRuleInterface` method can be called on it (FR-028).
-- Plan-driven amendments: FR-002 permits a derived occurrence index (rule stays the single source
-  of truth; expanding on every read measured 5.3 s for SC-003's volume against a 1 s target);
-  virtual occurrences have a null primary key, so key-based relationships are reached through the
-  series; generation per series is bounded by a configurable limit (SC-005).
+- Plan-driven amendments: FR-002 permitted a derived occurrence index (withdrawn by Amendment
+  2026-10-05); virtual occurrences have a null primary key, so key-based relationships are
+  reached through the series; generation per series is bounded by a configurable limit (SC-005).
 
 ### Analysis remediation 2026-10-05
 
@@ -58,14 +57,16 @@
   scope (FR-005, Assumptions).
 - Key-based chunking is rejected while occurrences are expanded (FR-007, US2-5).
 - Reads may not generate occurrences beyond a configurable ceiling after the current time
-  (FR-008); series too dense for the per-series limit are rejected on save (Edge Cases).
+  (FR-008; removed by Amendment 2026-10-05); series too dense for the per-series limit are
+  rejected on save (Edge Cases).
 - Stable tie-break ordering applies only to queries with at least one ordering that are not
   grouped, distinct or unions (FR-016).
 - A query fails on the materialisation ceiling only when it would actually have to generate
-  occurrences past it (FR-008).
+  occurrences past it (FR-008; ceiling removed by Amendment 2026-10-05).
 - A rule or start change resets all of the series' exclusions: exceptions are detached and
   cancellations are discarded; re-assigning an identical rule changes nothing (FR-022).
-- SC-003 names a reference machine and a built occurrence index.
+- SC-003 names a reference machine and a built occurrence index (superseded by Amendment
+  2026-10-05).
 
 ### Implementation amendment 2026-10-05
 
@@ -73,6 +74,22 @@
   window, page 1/200/last, three runs): PostgreSQL 0.33–0.65 s, MySQL 8.4 0.95–1.11 s, SQLite
   0.14–2.01 s (the last page needs a full sort of 365,000 rows). PostgreSQL keeps the 1-second
   budget; MySQL gets 2 seconds and SQLite 3 seconds.
+
+### Amendment 2026-10-05
+
+- The derived occurrence index permitted by the 2026-10-04 plan-driven amendment of FR-002 is
+  withdrawn. That amendment was a planning decision the user never approved; it contradicted the
+  input ("hydrated but non-persisted model instances") and the original FR-002 ("Occurrences MUST
+  never be stored"). The user chose to remove the index and expand per query, accepting the
+  performance cost. FR-002 forbids storing occurrences or anything derived from the rule.
+- The materialisation ceiling of FR-008 is removed with the index: occurrences are generated only
+  for the query's window, so far windows no longer need a ceiling. The per-series limit now
+  counts only occurrences inside the query's window.
+- SC-003 is relaxed to the measured per-query expansion (1,000 daily series, one-year window,
+  page 1/200/last): SQLite 3.45 4.8–7.4 s, MySQL 8.4 7.0–7.9 s, PostgreSQL 18 6.8–7.1 s.
+  Generating and encoding 365,000 occurrences costs ≈1.9 s per query and `paginate()` generates
+  twice (count and page). The 1/2/3-second budgets above are given up in exchange for storing
+  nothing.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -244,9 +261,10 @@ series, verifying query results after each step.
   upper bound can be derived; at worst more occurrences are evaluated and then filtered.
 - **Runaway generation**: A rule or query window that would require generating more occurrences of
   a single series than the configured per-series limit fails with a descriptive error instead of
-  exhausting time or memory. This includes saving a series whose rule generates more than the
-  limit between its start and the horizon (e.g. a minutely rule, or an hourly rule that started
-  more than about 5 years ago with the default limit); raising the configured limit is the remedy.
+  exhausting time or memory. For a query, only occurrences inside its window count. This includes
+  saving a series whose rule generates more than the limit between its start and the horizon
+  (e.g. a minutely rule, or an hourly rule that started more than about 5 years ago with the
+  default limit); raising the configured limit is the remedy.
 - **Overlap vs. start-in-window**: A query that constrains the end attribute (e.g. "ends after
   09:30") must match occurrences by their own computed end, so occurrences starting before the
   window but still running inside it are returned when the constraints say so.
@@ -284,8 +302,8 @@ series, verifying query results after each step.
   which holds the end time.
 - **FR-002**: Recurrence MUST be declarative: a record becomes a series by having a recurrence
   rule attached, and the rule is the single source of truth for its occurrences. Occurrences MUST
-  never be stored as records of the recurring model; the library MAY keep a derived occurrence
-  index that it rebuilds from the rule whenever the rule, the series start or its duration changes.
+  never be stored, neither as records of the recurring model nor as any other data derived from
+  the rule; they are generated from the rule for each query.
 - **FR-003**: Recurrence rules MUST be stored separately from the recurring model's own table, in
   a single store shared by all recurring model types, each rule linked polymorphically to exactly
   one owning record.
@@ -312,9 +330,9 @@ series, verifying query results after each step.
   has no end, the library MUST expand occurrences only up to a configurable horizon: by default
   1 year after the query's derived lower time bound, or 1 year after the current time when no
   lower bound can be derived. The horizon length MUST be configurable application-wide.
-  Occurrences beyond the horizon are not returned and not counted. Queries that would require
-  generating occurrences more than a configurable ceiling after the current time (default:
-  10 years) MUST fail with a descriptive error instead of generating them.
+  Occurrences beyond the horizon are not returned and not counted. Occurrences are generated only
+  for the query's window, so a query may reach any date; only the per-series limit (Edge Cases,
+  Runaway generation) bounds the work of one query.
 - **FR-009**: Every query constraint and ordering MUST be evaluated against each occurrence's own
   attribute values (series attributes with the occurrence's computed start/end), so results are
   identical to what the same query would return if every occurrence were a stored row.
@@ -397,12 +415,14 @@ series, verifying query results after each step.
   documentation, writing no query code that differs from what they would write for a
   non-recurring model.
 - **SC-002**: For every acceptance scenario above, the results (contents, order, counts, page
-  totals) are identical to those obtained by manually materialising every occurrence as a stored
-  row and running the same query against it.
+  totals) are identical to those obtained by manually storing every occurrence as a row and
+  running the same query against it.
 - **SC-003**: With 1,000 series each repeating daily and a one-year time window, a developer
-  obtains any page of 25 occurrences, including the total count, in under 1 second on PostgreSQL,
-  2 seconds on MySQL and 3 seconds on SQLite, on a machine with at least 4 CPU cores and 16 GB RAM
-  running the database locally, once the occurrence index covers the window.
+  obtains any page of 25 occurrences, including the total count, in under 7.5 seconds on SQLite
+  and PostgreSQL and 8 seconds on MySQL (measured: SQLite 3.45 4.8–7.4 s, MySQL 8.4 7.0–7.9 s,
+  PostgreSQL 18 6.8–7.1 s for pages 1, 200 and last; Apple-silicon development machine, PHP 8.5,
+  database running locally). Cost grows with the number of occurrences in the query's window, on
+  every query.
 - **SC-004**: 100% of single-occurrence edits and cancellations are reflected in the very next
   query, and leave every other occurrence of the series unchanged.
 - **SC-005**: No query on a recurring model, bounded or not, fails to terminate or exhausts memory

@@ -8,7 +8,7 @@ link targets used by other pages; keep them stable.
 | # | File | Must contain | Spec |
 |---|---|---|---|
 | 1 | `Home.md` | What Groundhog is (2–3 sentences); the problem it solves; when to use it and when not (e.g. needs "this and following" edits, iCalendar import, SQL Server); supported platforms (PHP 8.4+, Laravel 13, SQLite 3.35+, MySQL 8.4, PostgreSQL 14+); **Core concepts** glossary: recurring model, series, recurrence rule, occurrence / virtual occurrence, exception, cancellation, horizon; contents list linking every page | FR-001, FR-002 |
-| 2 | `Quick-Start.md` | Numbered steps, each with code and expected outcome: 1 install (Packagist command + "Before the first tagged release" VCS note, research R4); 2 publish and run the migration (+ optional config); 3 declare `Meeting` with `HasRecurrence`; 4 create the weekly Monday series; 5 query March and paginate; 6 edit the 16 March occurrence; 7 cancel the 23 March occurrence; 8 re-run the query and show the result; "Where next" links | FR-003, SC-001 |
+| 2 | `Quick-Start.md` | Numbered steps, each with code and expected outcome: 1 install (Packagist command + "Before the first tagged release" VCS note, research R4); 2 publish and run the migration (+ upgrade note for 0.1, + optional config); 3 declare `Meeting` with `HasRecurrence`; 4 create the weekly Monday series; 5 query March and paginate; 6 edit the 16 March occurrence; 7 cancel the 23 March occurrence; 8 re-run the query and show the result; "Where next" links | FR-003, SC-001 |
 
 ## Guide
 
@@ -28,10 +28,10 @@ link targets used by other pages; keep them stable.
 
 | # | File | Must contain | Spec |
 |---|---|---|---|
-| 12 | `Configuration.md` | Publishing the config; one `##` per key (`horizon`, `max_occurrences_per_series`, `max_materialization_ahead`) with type, default, effect, example change | FR-008 |
-| 13 | `Errors.md` | One `##` per exception class (`InvalidRecurrenceRule`, `RecurrenceNotSupported`, `OccurrenceLimitExceeded`, `IncompatibleEloquentBuilder`): parent class, each cause with an example message, how to fix or avoid | FR-009, SC-006 |
-| 14 | `Limitations.md` | One `##` per limitation, matching the README caveats: key-based relations empty on occurrences; `chunkById`/`lazyById`/`eachById`; `cursorPaginate`; SQL Server; queueing occurrences; bulk deletes of series rows; dense rules and the ceiling; `cursor()` identity; "this and following" edits; RDATE/EXDATE; iCalendar import/export — each with workaround | FR-010, FR-017 |
-| 15 | `How-It-Works.md` | Expansion as a derived table aliased as the model's table · The occurrence index and lazy extension · Exclusions (exception links, cancellations) · Horizon, per-series limit and materialisation ceiling · Key-pinned queries read stored rows · Performance per database (SC-003 numbers) and what makes queries faster (time bounds) | FR-011 |
+| 12 | `Configuration.md` | Publishing the config; one `##` per key (`horizon`, `max_occurrences_per_series`) with type, default, effect, example change | FR-008 |
+| 13 | `Errors.md` | One `##` per exception class (`InvalidRecurrenceRule`, `RecurrenceNotSupported` incl. unsupported database driver, `OccurrenceLimitExceeded`, `IncompatibleEloquentBuilder`): parent class, each cause with an example message, how to fix or avoid | FR-009, SC-006 |
+| 14 | `Limitations.md` | One `##` per limitation, matching the README caveats: key-based relations empty on occurrences; `chunkById`/`lazyById`/`eachById`; `cursorPaginate`; only SQLite, MySQL and PostgreSQL; queueing occurrences; bulk deletes of series rows; dense rules; every query generates its occurrences; `cursor()` identity; "this and following" edits; RDATE/EXDATE; iCalendar import/export — each with workaround | FR-010, FR-017 |
+| 15 | `How-It-Works.md` | Expansion as a derived table aliased as the model's table · Generating occurrences per query (JSON parameter, union of stored rows and occurrence rows, generation window) · Exclusions (exception links, cancellations) · Horizon and per-series limit · Key-pinned queries read stored rows · Performance per database (measured SC-003 numbers) and what makes queries faster (time bounds) | FR-011 |
 
 ## Contributing
 

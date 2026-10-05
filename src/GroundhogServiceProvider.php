@@ -6,8 +6,8 @@ use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
 
 /**
- * Registers the publishable configuration (tag `groundhog-config`) and the migration that
- * creates the package tables (tag `groundhog-migrations`).
+ * Registers the publishable configuration (tag `groundhog-config`) and the migrations that
+ * create the package tables and upgrade older installations (tag `groundhog-migrations`).
  */
 class GroundhogServiceProvider extends PackageServiceProvider
 {
@@ -16,6 +16,6 @@ class GroundhogServiceProvider extends PackageServiceProvider
         $package
             ->name('groundhog')
             ->hasConfigFile()
-            ->hasMigration('create_groundhog_tables');
+            ->hasMigrations(['create_groundhog_tables', 'drop_groundhog_occurrence_index']);
     }
 }

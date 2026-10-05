@@ -6,7 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 use LogicException;
 
 /**
- * Thrown when an operation cannot apply to a recurring model in its current role.
+ * Thrown when an operation cannot apply to a recurring model in its current role, or on its
+ * database.
  */
 final class RecurrenceNotSupported extends LogicException
 {
@@ -43,6 +44,18 @@ final class RecurrenceNotSupported extends LogicException
         return new self(sprintf(
             '%s() cannot iterate expanded occurrences because virtual occurrences have no primary key; use chunk()/lazy(), or withoutOccurrences() for stored rows only.',
             $method,
+        ));
+    }
+
+    /**
+     * Occurrences reach SQL through a database-specific JSON table function, which exists for
+     * SQLite, MySQL and PostgreSQL only.
+     */
+    public static function forDatabaseDriver(string $driver): self
+    {
+        return new self(sprintf(
+            'Cannot expand occurrences on the "%s" database driver; Groundhog supports sqlite, mysql and pgsql.',
+            $driver,
         ));
     }
 

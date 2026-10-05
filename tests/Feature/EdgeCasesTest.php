@@ -3,12 +3,10 @@
 use BoysFromTheFactory\Groundhog\Exceptions\IncompatibleEloquentBuilder;
 use BoysFromTheFactory\Groundhog\Exceptions\OccurrenceLimitExceeded;
 use BoysFromTheFactory\Groundhog\Exceptions\RecurrenceNotSupported;
-use BoysFromTheFactory\Groundhog\Models\Recurrence;
 use BoysFromTheFactory\Groundhog\Query\RecurringBuilder;
 use Illuminate\Database\Eloquent\Attributes\UseEloquentBuilder;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Routing\Middleware\SubstituteBindings;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Workbench\App\Models\Attendee;
 use Workbench\App\Models\Meeting;
@@ -90,32 +88,18 @@ it('eager loads foreign-key relations from the series values and the series itse
 });
 
 it('fails instead of generating past the per-series limit on a far query', function () {
-    $series = mondaySeries(['starts_at' => '2026-03-01 09:00:00', 'ends_at' => '2026-03-01 10:00:00', 'recurrence_rule' => 'FREQ=DAILY']);
-    $materializedUntil = Recurrence::sole()->materialized_until;
+    mondaySeries(['starts_at' => '2026-03-01 09:00:00', 'ends_at' => '2026-03-01 10:00:00', 'recurrence_rule' => 'FREQ=DAILY']);
     config(['groundhog.max_occurrences_per_series' => 1000]);
 
     expect(fn () => Meeting::where('starts_at', '<', '2034-01-01 00:00:00')->count())
         ->toThrow(OccurrenceLimitExceeded::class);
-
-    expect(Recurrence::sole()->materialized_until->equalTo($materializedUntil))->toBeTrue();
 });
 
-it('fails instead of generating past the materialisation ceiling', function () {
-    config(['groundhog.max_materialization_ahead' => 'P2Y']);
+it('counts only the queried window against the per-series limit', function () {
     mondaySeries(['starts_at' => '2026-03-01 09:00:00', 'ends_at' => '2026-03-01 10:00:00', 'recurrence_rule' => 'FREQ=DAILY']);
+    config(['groundhog.max_occurrences_per_series' => 1000]);
 
-    expect(fn () => Meeting::where('starts_at', '<', '2030-06-01 00:00:00')->count())
-        ->toThrow(OccurrenceLimitExceeded::class);
-
-    expect(DB::table('groundhog_occurrences')->where('starts_at', '>=', '2027-03-01 00:00:00')->count())->toBe(0);
-});
-
-it('applies the ceiling only when occurrences would have to be generated', function () {
-    config(['groundhog.max_materialization_ahead' => 'P2Y']);
-    mondaySeries(['recurrence_rule' => 'FREQ=WEEKLY;BYDAY=MO;COUNT=2']);
-    Meeting::create(['title' => 'Review', 'starts_at' => '2026-03-11 14:00:00', 'ends_at' => '2026-03-11 15:00:00']);
-
-    expect(Meeting::where('starts_at', '<', '2100-01-01 00:00:00')->count())->toBe(3);
+    expect(Meeting::whereBetween('starts_at', ['2040-01-01 00:00:00', '2040-01-31 23:59:59'])->count())->toBe(31);
 });
 
 it('requires a custom builder to extend RecurringBuilder', function () {

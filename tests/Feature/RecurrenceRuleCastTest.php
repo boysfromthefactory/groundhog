@@ -114,7 +114,7 @@ it('refuses an infinite rule too dense for the per-series limit up to the horizo
         ->toThrow(OccurrenceLimitExceeded::class);
 
     expect(DB::table('meetings')->count())->toBe(0)
-        ->and(DB::table('groundhog_occurrences')->count())->toBe(0);
+        ->and(Recurrence::count())->toBe(0);
 });
 
 it('persists the rule on saveQuietly()', function () {

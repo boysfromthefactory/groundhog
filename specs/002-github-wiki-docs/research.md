@@ -116,9 +116,11 @@ remain.
 ## R8 — Clock-dependent and database-dependent statements
 
 - **Decision**: Examples whose result depends on "now" (open-ended rules, the horizon, the
-  materialisation ceiling) state the assumed current date (1 March 2026, as in the test suite).
-  Performance statements quote the measured SC-003 results per database (PostgreSQL < 1 s,
-  MySQL < 2 s, SQLite < 3 s for any page of 25 out of 365,000 occurrences).
+  per-series limit on save) state the assumed current date (1 March 2026, as in the test suite).
+  Performance statements quote the measured SC-003 results per database (SQLite 4.8–7.4 s,
+  MySQL 7.0–7.9 s, PostgreSQL 6.8–7.1 s for a page of 25 plus total out of 365,000 occurrences,
+  after the 2026-10-05 removal of the occurrence index; the earlier < 1/2/3 s figures applied to
+  the 0.1 index).
 - **Rationale**: Without the date, "365 occurrences" is not reproducible; without per-database
   numbers the documentation would imply one result for all (spec Edge Cases).
 

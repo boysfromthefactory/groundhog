@@ -46,17 +46,19 @@ return [
     // bound (or after now) when the query gives no upper bound.
     'horizon' => 'P1Y',
 
-    // Most occurrences one series may generate in one pass; more fails with OccurrenceLimitExceeded.
+    // Most occurrences one series may generate for one query (or on save); more fails with
+    // OccurrenceLimitExceeded.
     'max_occurrences_per_series' => 50000,
-
-    // ISO-8601 duration from now: how far ahead a read may extend the stored occurrence index.
-    'max_materialization_ahead' => 'P10Y',
 ];
 ```
 
-The migration creates three tables: `groundhog_recurrences` (one rule per series),
-`groundhog_occurrences` (a derived index of each rule's occurrences) and `groundhog_exclusions`
-(exceptions and cancellations). Your own tables need no new columns.
+The migration creates two tables: `groundhog_recurrences` (one rule per series) and
+`groundhog_exclusions` (exceptions and cancellations). Occurrences are generated per query and
+never stored. Your own tables need no new columns.
+
+Upgrading from 0.1: run `php artisan vendor:publish --tag="groundhog-migrations"` and
+`php artisan migrate` again. The newly published migration drops the `groundhog_occurrences`
+table and the `materialized_until` column.
 
 ## Declaring a recurring model
 
@@ -171,8 +173,14 @@ occurrences and exceptions; soft-deleting it hides them until `restore()`.
   `isOccurrenceException()`, `originalOccurrenceStart()` or `series` is used; use `get()` or
   `lazy()` when serialising them.
 - A series whose rule generates more than `max_occurrences_per_series` occurrences between its
-  start and the horizon is rejected on save, and a read that would need occurrences beyond
-  `max_materialization_ahead` throws `OccurrenceLimitExceeded`.
+  start and the horizon is rejected on save, and a query whose window holds more than that many
+  occurrences of one series throws `OccurrenceLimitExceeded`.
+- Nothing derived from a rule is stored: every expanded query loads all series of the model
+  type and generates their occurrences for its window, so cost grows with series × occurrences
+  in the window. 1,000 daily series over a one-year window take about 5–8 s for a page of 25
+  with its total (SQLite, MySQL 8.4, PostgreSQL 18; see the wiki's How It Works page).
+- Expanded queries on any driver other than SQLite, MySQL or PostgreSQL throw
+  `RecurrenceNotSupported`.
 - `cursorPaginate()` is not supported, and occurrences cannot be queued by identity.
 - Bulk deletes of series rows bypass the cleanup of their rules, as Eloquent bulk deletes bypass
   model events.

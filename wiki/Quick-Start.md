@@ -14,9 +14,12 @@ php artisan vendor:publish --tag="groundhog-migrations"
 php artisan migrate
 ```
 
-Result: three new tables, `groundhog_recurrences` (one rule per series), `groundhog_occurrences`
-(the occurrences each rule generates) and `groundhog_exclusions` (edited and cancelled
-occurrences). Your own tables need no new columns.
+Result: two new tables, `groundhog_recurrences` (one rule per series) and `groundhog_exclusions`
+(edited and cancelled occurrences). Occurrences themselves are never stored. Your own tables
+need no new columns.
+
+Upgrading from 0.1: run the same two commands. They publish a second migration that drops the
+`groundhog_occurrences` table and the `materialized_until` column 0.1 created.
 
 Optionally publish the configuration to change the defaults described in
 [Configuration](Configuration):

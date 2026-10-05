@@ -92,7 +92,7 @@ it('propagates series edits to virtual occurrences but not to exceptions (US4-3,
         ->and((int) $march[2]->groundhog_series_key)->toBe($series->id);
 });
 
-it('removes the rule, index, exclusions and exceptions when the series is force-deleted (US4-4, FR-023)', function () {
+it('removes the rule, exclusions and exceptions when the series is force-deleted (US4-4, FR-023)', function () {
     $series = mondaySeries();
     $kept = exceptionOnSixteenth();
     $trashed = occurrenceOn('2026-03-23');
@@ -108,7 +108,6 @@ it('removes the rule, index, exclusions and exceptions when the series is force-
     sort($deleted);
 
     expect(Recurrence::count())->toBe(0)
-        ->and(DB::table('groundhog_occurrences')->count())->toBe(0)
         ->and(DB::table('groundhog_exclusions')->count())->toBe(0)
         ->and(Meeting::withTrashed()->withoutOccurrences()->count())->toBe(0)
         ->and($deleted)->toBe([$series->id, $kept->id, $trashed->id]);

@@ -9,10 +9,10 @@ use BoysFromTheFactory\Groundhog\Exceptions\InvalidRecurrenceRule;
 use BoysFromTheFactory\Groundhog\Exceptions\OccurrenceLimitExceeded;
 use BoysFromTheFactory\Groundhog\Exceptions\RecurrenceNotSupported;
 use BoysFromTheFactory\Groundhog\Index\ExceptionLedger;
-use BoysFromTheFactory\Groundhog\Index\OccurrenceIndex;
 use BoysFromTheFactory\Groundhog\Models\Recurrence;
 use BoysFromTheFactory\Groundhog\Query\OccurrenceScope;
 use BoysFromTheFactory\Groundhog\Query\RecurringBuilder;
+use BoysFromTheFactory\Groundhog\Rules\OccurrenceGenerator;
 use BoysFromTheFactory\Groundhog\Rules\RuleFactory;
 use BoysFromTheFactory\Groundhog\Support\RecurrenceColumns;
 use Carbon\CarbonImmutable;
@@ -198,7 +198,7 @@ trait HasRecurrence
     }
 
     /**
-     * Saves the record and, in the same transaction, its pending rule and occurrence index.
+     * Saves the record and, in the same transaction, its pending rule.
      *
      * @param  array<string, mixed>  $options
      *
@@ -238,22 +238,21 @@ trait HasRecurrence
         }
 
         $startChanged = $this->exists && $this->isDirty($columns->start);
-        $durationChanged = $this->exists && $columns->end !== null && $this->isDirty($columns->end);
 
         if (! parent::save($options)) {
             return false;
         }
 
         if ($assignsRule) {
-            $this->persistRecurrence($pendingInput, $this->storedRecurrence(), $durationChanged);
+            $this->persistRecurrence($pendingInput, $this->storedRecurrence());
         } elseif ($this->hasPendingRecurrence) {
-            // Deleting the rule row cascades its index and exclusions, so its exceptions become
-            // plain records (FR-022).
+            // Deleting the rule row cascades its exclusions, so its exceptions become plain
+            // records (FR-022).
             $this->storedRecurrence()?->delete();
             $this->setRelation('recurrence', null);
-        } elseif (($startChanged || $durationChanged) && ($stored = $this->storedRecurrence()) !== null) {
-            // A new start or duration moves every occurrence; the rule text carries DTSTART.
-            $this->persistRecurrence(RuleFactory::fromStored($stored->rule), $stored, $durationChanged);
+        } elseif ($startChanged && ($stored = $this->storedRecurrence()) !== null) {
+            // A new start moves every occurrence; the rule text carries DTSTART.
+            $this->persistRecurrence(RuleFactory::fromStored($stored->rule), $stored);
         }
 
         return true;
@@ -347,26 +346,24 @@ trait HasRecurrence
     }
 
     /**
-     * Stores the rule anchored at the saved start. A first rule builds the index. A changed rule
-     * text (new rule or new start) resets the series' exclusions and rebuilds the index
-     * (FR-022). An identical rule leaves both alone unless the duration changed, which only
-     * rebuilds the index.
+     * Stores the rule anchored at the saved start. A changed rule text (new rule or new start)
+     * resets the series' exclusions (FR-022); an identical rule leaves them alone.
      *
      * @param  string|array<string, mixed>|RRule  $input
+     *
+     * @throws OccurrenceLimitExceeded when the rule is too dense for the per-series limit
      */
-    private function persistRecurrence(string|array|RRule $input, ?Recurrence $existing, bool $durationChanged): void
+    private function persistRecurrence(string|array|RRule $input, ?Recurrence $existing): void
     {
         $start = RecurrenceColumns::of($this)->startOf($this) ?? throw RecurrenceNotSupported::missingStart($this);
         $rule = RuleFactory::make($input, $start, RecurrenceColumns::applicationTimezone());
         $text = $rule->rfcString();
 
         if ($existing !== null && $existing->rule === $text) {
-            if ($durationChanged) {
-                OccurrenceIndex::rebuild($this, $existing, $rule);
-            }
-
             return;
         }
+
+        OccurrenceGenerator::assertWithinLimit($this, $rule);
 
         if ($existing !== null) {
             ExceptionLedger::resetExclusions($existing);
@@ -378,10 +375,6 @@ trait HasRecurrence
         $recurrence->is_infinite = $rule->isInfinite();
         $recurrence->save();
         $this->setRelation('recurrence', $recurrence);
-
-        $existing === null
-            ? OccurrenceIndex::materialize($this, $recurrence, $rule)
-            : OccurrenceIndex::rebuild($this, $recurrence, $rule);
     }
 
     /**
@@ -393,7 +386,7 @@ trait HasRecurrence
      *   occurrence stays cancelled (FR-020). A soft delete hides it until restore.
      * - Series: a soft delete hides it with its occurrences and exceptions; a hard delete also
      *   force-deletes its exceptions, trashed ones included, and removes the rule, whose rows
-     *   cascade to the index and exclusions (FR-023).
+     *   cascade to its exclusions (FR-023).
      *
      * @return bool|null
      */

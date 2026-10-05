@@ -43,9 +43,14 @@ See [research.md R5](../research.md#r5--deriving-the-time-window-from-ordinary-c
 Summary:
 - An upper bound comes from AND-ed `<`, `<=`, `=`, `between` on start, end or
   `groundhog_original_starts_at`.
-- If there is no upper bound, infinite rules are capped at `(lower ?? now) + horizon`.
-- A query whose window needs index rows later than `now + max_materialization_ahead` throws
-  `OccurrenceLimitExceeded` before anything is written.
+- If there is no upper bound, infinite rules are capped at `(lower start ?? lower end ?? now) +
+  horizon`; finite rules expand to their end.
+- Each series generates only the starts in its window: from the lower start bound (raised to the
+  lower end bound minus the series' duration) up to the inclusive upper start bound. The rows are
+  generated for every query and never stored; results never depend on earlier queries.
+- A series with more than `max_occurrences_per_series` occurrences in the window throws
+  `OccurrenceLimitExceeded`. Expanded queries on drivers other than sqlite, mysql and pgsql throw
+  `RecurrenceNotSupported`.
 - Bounds hidden under `or`/raw SQL are ignored (conservative).
 
 ## Explicit column selection

@@ -38,27 +38,35 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
 - **Alternatives considered**: `simshaun/recurr` — rejected; the user mandated php-rrule, and it
   has no `humanReadable()` equivalent with the same interface.
 
-## R3 — Expanding on every read vs. a derived occurrence index
+## R3 — Expanding per query vs. a derived occurrence index
 
-- **Decision**: Keep a **derived occurrence index** table (`groundhog_occurrences`) holding the
-  rule's raw expansion `(recurrence_id, starts_at, ends_at)`. It is filled when a rule is saved,
-  extended on demand by reads, and rebuilt whenever rule, series start or duration change. The
-  rule stays the single source of truth (spec FR-002 as amended).
-- **Rationale**: Measured php-rrule throughput: 1,000 daily series × 1 year = 366,000
-  occurrences in **5.31 s** (PHP 8.5, this machine). SC-003 requires a page plus total in < 1 s
-  for exactly that volume, so expanding in PHP on each read cannot meet it. Also, FR-009 requires
-  every SQL constraint (raw wheres, `whereHas`, joins, arbitrary `orderBy`) to apply to
-  occurrences. That is only possible if occurrences exist as SQL rows when the query runs; an
-  in-PHP filter cannot evaluate arbitrary SQL.
-- **Exclusions are not removed from the index**; queries anti-join `groundhog_exclusions`. The
-  index is therefore a pure function of (rule, start, duration), and concurrent
-  cancel/extend operations cannot re-insert an excluded start.
+- **Decision** (revised 2026-10-05): **expand per query**. When a query is built, every series of
+  the model type is loaded (one query joining the model table to `groundhog_recurrences`), each
+  rule is expanded with php-rrule for the query's window only (R6), and all rows
+  `(recurrence_id, starts_at, ends_at)` are passed to SQL as one JSON parameter that the
+  database's JSON table function unpacks (R4). Nothing derived from a rule is stored (FR-002).
+- **Rationale**: FR-002 and the input ("hydrated but non-persisted model instances") forbid
+  storing occurrences; the user chose per-query expansion and accepted its cost. FR-009 still
+  requires every SQL constraint (raw wheres, `whereHas`, joins, arbitrary `orderBy`) to apply to
+  occurrences, so they must exist as SQL rows when the query runs; an in-PHP filter cannot
+  evaluate arbitrary SQL. Measured cost at the SC-003 volume (1,000 daily series × 1 year =
+  365,000 occurrences): ≈1.9 s per query to generate and encode (php-rrule alone ≈1.3 s; per-row
+  Carbon conversion would add ≈3.4 s, so the generator uses native date-times), twice per
+  `paginate()`; full page plus total 4.8–7.4 s (SQLite 3.45), 7.0–7.9 s (MySQL 8.4), 6.8–7.1 s
+  (PostgreSQL 18).
+- **Exclusions are applied in SQL**; queries anti-join `groundhog_exclusions`, so generation is a
+  pure function of (rule, start, duration, window).
 - **Alternatives considered**:
-  - Per-query temporary table / inline `VALUES`: still pays the 5.3 s generation per query, and
-    inline values hit the 65,535 bind-parameter limit.
+  - Derived occurrence index table (`groundhog_occurrences`, chosen in planning on 2026-10-04 and
+    shipped in 0.1): filled on rule save, extended lazily by reads up to a materialisation ceiling,
+    rebuilt on rule/start/duration change; met the 1/2/3 s targets. Dropped on 2026-10-05: it
+    stored rule-derived data, which the original FR-002 forbids, through a planning amendment the
+    user never approved.
+  - Inline `VALUES` / one bind parameter per value: hits the 65,535 bind-parameter limit.
+  - Per-query temporary table: adds writes and DDL to every read.
   - SQL-native expansion (recursive CTE): cannot express BYSETPOS/BYWEEKNO/BYDAY ordinals
     portably across SQLite, MySQL and PostgreSQL.
-  - Materialising occurrences as model rows: violates FR-002 and the "non-persisted instances"
+  - Storing occurrences as model rows: violates FR-002 and the "non-persisted instances"
     requirement.
 
 ## R4 — Making ordinary Eloquent queries return occurrences
@@ -67,20 +75,33 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   table aliased as the model's own table name:
 
   ```text
-  (select <model columns, start/end replaced by the occurrence's values>,
-          <pk: null for virtual rows>, groundhog_series_key, groundhog_original_starts_at
-     from <table> m
-     left join (select xe.exception_id, xe.original_starts_at, re.recurrable_id as series_key
-                  from groundhog_exclusions xe
-                  join groundhog_recurrences re on re.id = xe.recurrence_id
-                 where re.recurrable_type = :morphClass) xl on xl.exception_id = m.<pk>  -- identifies exception rows
-     left join <table> s                 on s.<pk> = xl.series_key                   -- soft-deletable models only
-     left join groundhog_recurrences r   on r.recurrable_type = :morphClass and r.recurrable_id = m.<pk>
-     left join groundhog_occurrences o   on o.recurrence_id = r.id [and pushed-down start bounds]
-     left join groundhog_exclusions xo   on xo.recurrence_id = o.recurrence_id and xo.original_starts_at = o.starts_at
-    where (r.id is null or (o.recurrence_id is not null and xo.recurrence_id is null and (not r.is_infinite or o.starts_at < :cap)))
+  ( -- stored rows that are not series: plain records and exceptions
+    select m.<columns>, xl.series_key as groundhog_series_key,
+           xl.original_starts_at as groundhog_original_starts_at
+      from <table> m
+      left join (select xe.exception_id, xe.original_starts_at, re.recurrable_id as series_key
+                   from groundhog_exclusions xe
+                   join groundhog_recurrences re on re.id = xe.recurrence_id
+                  where re.recurrable_type = :morphClass
+                    and xe.exception_id is not null) xl on xl.exception_id = m.<pk>
+      left join <table> s                on s.<pk> = xl.series_key          -- soft-deletable models only
+      left join groundhog_recurrences r  on r.recurrable_type = :morphClass and r.recurrable_id = m.<pk>
+     where r.id is null
+    union all
+    -- occurrence rows generated for this query, joined to their series
+    select <series columns, pk null, start/end from o>, r.recurrable_id, o.starts_at
+      from <json table of :occurrences> o            -- [[recurrence_id, starts_at, ends_at], ...]
+      join groundhog_recurrences r       on r.id = o.recurrence_id
+      join <table> m                     on m.<pk> = r.recurrable_id
+      left join groundhog_exclusions xo  on xo.recurrence_id = o.recurrence_id and xo.original_starts_at = o.starts_at
+     where xo.recurrence_id is null
   ) as <table>
   ```
+
+  `<json table>` is `json_each(?)` on SQLite, `JSON_TABLE(?, '$[*]' …)` on MySQL and
+  `json_array_elements(cast(? as json))` on PostgreSQL; other drivers throw
+  `RecurrenceNotSupported::forDatabaseDriver()`. One JSON parameter carries every row, so the
+  bind-parameter limit (65,535 on MySQL/PostgreSQL) is never reached.
 
   Because the alias equals the table name, user constraints like `where('meetings.title', …)`,
   joins, `whereHas` correlation, `orderBy`, aggregates, `paginate()`'s count query and
@@ -105,9 +126,8 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   `find`, `findMany`, `whereKey`, `destroy`, belongs-to relations and `whereHas` from other
   models without overriding each entry point: virtual rows have no key, so only the series row
   could be lost. The trait's `resolveRouteBindingQuery()` drops the scope for custom route keys.
-- **Join order (SC-003)**: left joins keep their written order, so the joins that depend only on
-  the stored row (`xl`, `s`) come before the occurrence joins and run once per record, not once
-  per occurrence (MySQL 8.4: −0.1 s per query at the SC-003 volume).
+- **Join order (SC-003)**: in the stored-rows part, the joins that depend only on the stored row
+  (`xl`, `s`) come first; the occurrence part joins each JSON row to its series by primary key.
 - **Exception link isolation**: The model-type filter sits inside the `xl` subquery. A plain
   left join on `exception_id` alone would duplicate a row whenever exceptions of two model types
   share a key value.
@@ -136,47 +156,49 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
   | `groundhog_original_starts_at` comparisons | same as start | same as start |
 
   Anything under an `or`, raw expressions or subqueries contributes nothing (conservative).
-- **Cap**: If no upper bound is derived, `cap = (lower bound ?? now()) + config('groundhog.horizon')`
-  and the derived table filters index rows of infinite rules by `o.starts_at < cap`. Finite rules
-  are never capped (US1-5). The cap is a SQL predicate, not a property of what happens to be in
-  the index, so results never depend on earlier queries (determinism).
-- **Push-down**: Start-derived bounds are also added to the `groundhog_occurrences` join, so that
-  databases without derived-condition push-down still use the `(recurrence_id, starts_at)` index.
-  This is safe because the user's own predicates imply them.
-- **Materialisation target**: before the query runs, every infinite recurrence of the model type
-  whose `materialized_until` is below `upper bound ?? cap` is extended up to it (R6).
+- **Cap**: If no upper bound is derived, `cap = (lower start bound ?? lower end bound ?? now()) +
+  config('groundhog.horizon')`, and infinite rules are generated only for starts before `cap`.
+  Finite rules are never capped (US1-5). Generation depends only on the query, so results never
+  depend on earlier queries (determinism).
+- **Generation window**: the derived bounds also limit which occurrences are generated (R6), so
+  a narrow window generates few rows. This is safe because the user's own predicates imply them.
 
-## R6 — Index maintenance, concurrency and limits
+## R6 — Generation window and limits
 
-- **Decision**:
-  - **On rule save**: generate from DTSTART up to `max(now + horizon, previous materialized_until)` (infinite) or to the end (finite).
-  - **On read**: extend lagging infinite recurrences in a transaction that takes a `lockForUpdate` on the recurrence row, re-reads `materialized_until`, and inserts in chunks of 500 via `insertOrIgnore` on the unique `(recurrence_id, starts_at)` key. This is idempotent if two workers race.
-  - **On rule/start change**: the same locked transaction deletes the index rows, regenerates them, resets the series' exclusions (exceptions detached, cancellations discarded; FR-022) and rewrites DTSTART. A rule counts as changed only when its `rfcString()` differs from the stored text.
-  - **On duration change only**: regenerate the index without resetting exclusions.
-- **Limit**: `config('groundhog.max_occurrences_per_series')` (default 50,000) bounds any single
-  generation pass. php-rrule is asked for `limit + 1` occurrences; reaching it throws
-  `OccurrenceLimitExceeded` naming the series and window (SC-005, spec edge case "Runaway
-  generation"). 50,000 covers 136 years of daily or 5.7 years of hourly occurrences.
-  Because a rule save materialises from DTSTART to `now + horizon` in one pass, rules denser than
-  the limit over that span (e.g. minutely) are rejected on save.
-- **Materialisation ceiling**: `config('groundhog.max_materialization_ahead')` (default `P10Y`).
-  A read that needs index rows later than `now + ceiling` throws `OccurrenceLimitExceeded`
-  before writing, so a single request cannot persist an unbounded number of rows (FR-008).
-- **Write connection**: materialisation runs on the model's connection inside a transaction, so
-  read/write-split setups use the write PDO.
-- **Alternatives considered**: Scheduled artisan command to pre-extend — rejected as the only
-  mechanism because a query beyond the scheduled range would silently return too little. Lazy
-  extension is required anyway; a scheduler would only be an optimisation (YAGNI).
+- **Decision** (revised 2026-10-05): nothing is maintained between queries. For each query,
+  `OccurrenceRows` loads every series of the model type and `OccurrenceGenerator` expands each
+  rule for that series' window:
+  - **Lower**: the query's lower start bound, raised to (lower end bound − series duration) when
+    the query bounds the end column from below.
+  - **Upper**: the query's upper start bound, inclusive (an upper end bound also caps start);
+    otherwise infinite rules stop at the cap (R5) and finite rules expand to their end.
+  - **On rule/start change**: the series' exclusions are reset (exceptions detached,
+    cancellations discarded; FR-022) and DTSTART is rewritten. A rule counts as changed only when
+    its `rfcString()` differs from the stored text.
+  - **On duration change only**: nothing happens; occurrence ends change on the next query.
+- **Limit**: `config('groundhog.max_occurrences_per_series')` (default 50,000) bounds the
+  occurrences one series generates for one query (only occurrences inside the window count) and
+  the check on save (a finite rule in full, an infinite rule from DTSTART to `now + horizon`).
+  php-rrule is asked for `limit + 1` occurrences; reaching it throws `OccurrenceLimitExceeded`
+  naming the series and window (SC-005, spec edge case "Runaway generation"). 50,000 covers 136
+  years of daily or 5.7 years of hourly occurrences; minutely rules are rejected on save.
+- **No read ceiling**: because a query generates only its own window, a far window (e.g. one
+  month in 2040) costs the same as a near one. The 0.1 `max_materialization_ahead` ceiling, which
+  stopped a request from persisting unbounded rows, is removed.
+- **Alternatives considered** (history): 0.1 maintained a stored index, built on rule save,
+  extended lazily by reads under a `lockForUpdate` on the recurrence row (`insertOrIgnore` in
+  chunks of 500), rebuilt on rule, start or duration change, and bounded by a read ceiling.
+  Withdrawn with the index (R3).
 
 ## R7 — Time representation
 
-- **Decision**: Index `starts_at`/`ends_at` and exclusion `original_starts_at` are written with the
+- **Decision**: Generated `starts_at`/`ends_at` and exclusion `original_starts_at` are written with the
   model's own `fromDateTime()` (its date format, in the application time zone), the exact
   representation Eloquent uses for the model's start column. SQL comparisons and equality joins
   are therefore exact. The rule is evaluated in `groundhog_recurrences.timezone`, which comes
   from the assigned input's DTSTART zone if it has one, otherwise `config('app.timezone')`.
   DTSTART's date-time always comes from the model's start attribute. Occurrence end =
-  occurrence start + (series end − series start), computed in PHP during materialisation.
+  occurrence start + (series end − series start), computed in PHP during generation.
 - **Tests**: Clock-dependent behaviour (default horizon) uses `$this->travelTo()`; tests never read
   the real clock (Constitution II).
 
@@ -223,11 +245,11 @@ outside the repo). No `NEEDS CLARIFICATION` items remain.
 - **Write interception (all inside a DB transaction)**:
   - **`save()`**:
     - Virtual occurrence → insert as a new row, then insert the exclusion with `exception_id` (FR-017, FR-025).
-    - Any record with a pending rule → persist the rule: first rule → build the index; changed `rfcString()` → rebuild it; identical rule → no change.
+    - Any record with a pending rule → persist the rule after checking the per-series limit: first rule → insert it; changed `rfcString()` → update it and reset exclusions; identical rule → no change.
   - **`delete()`**:
     - Virtual occurrence → fire `deleting`; if not halted, insert a cancellation exclusion; fire `deleted` (FR-019, FR-024).
     - Exception, hard delete → null its exclusion's `exception_id`, leaving a cancellation (FR-020). Soft delete keeps the link; the soft-delete scope hides the row, so the occurrence stays cancelled until restore.
-    - Series, hard delete → force-delete its exceptions (including already-trashed ones) through model `forceDelete()`, then the recurrence row; FKs cascade index and exclusions (FR-023). Soft delete → only the series row is trashed; its exceptions are hidden through the derived deleted-at column until restore.
+    - Series, hard delete → force-delete its exceptions (including already-trashed ones) through model `forceDelete()`, then the recurrence row; FKs cascade exclusions (FR-023). Soft delete → only the series row is trashed; its exceptions are hidden through the derived deleted-at column until restore.
   - **`update()`**: Eloquent returns `false` on non-existing models (verified); the trait performs
     fill + save for virtual occurrences (US3-5).
   - **`incrementOrDecrement()`**: Eloquent runs an unconstrained table-wide update for

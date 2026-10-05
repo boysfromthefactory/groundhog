@@ -1,6 +1,6 @@
 # Data Model: Groundhog — Recurring Eloquent Models
 
-Three package tables plus the application's own recurring-model table. Key column types for
+Two package tables plus the application's own recurring-model table. Key column types for
 `recurrable_id` and `exception_id` follow Laravel's default morph key type
 (`Schema::morphUsingUuids()` / `morphUsingUlids()`), so joins against the model's primary key
 compare equal types on every supported database.
@@ -8,7 +8,6 @@ compare equal types on every supported database.
 ```mermaid
 erDiagram
     RECURRING_MODEL ||--o| GROUNDHOG_RECURRENCES : "recurrable (morph)"
-    GROUNDHOG_RECURRENCES ||--o{ GROUNDHOG_OCCURRENCES : "derived index"
     GROUNDHOG_RECURRENCES ||--o{ GROUNDHOG_EXCLUSIONS : "excluded starts"
     GROUNDHOG_EXCLUSIONS }o--o| RECURRING_MODEL : "exception_id (same model type)"
 ```
@@ -45,8 +44,7 @@ result set; never written):
 | `recurrable_type`, `recurrable_id` | `morphs()` | unique pair: one rule per series |
 | `rule` | text | RFC 5545 text from `RRule::rfcString()`, incl. `DTSTART;TZID=` |
 | `timezone` | string(64) | IANA zone the rule is evaluated in |
-| `is_infinite` | boolean | cached `RRule::isInfinite()`, used by the horizon cap in SQL |
-| `materialized_until` | datetime, nullable | exclusive upper bound of rows present in the index; `null` = finite rule fully materialised |
+| `is_infinite` | boolean | cached `RRule::isInfinite()`, selects the horizon cap during generation |
 | `created_at`, `updated_at` | timestamps | |
 
 Validation (on assignment, before any write; FR-006):
@@ -54,23 +52,11 @@ Validation (on assignment, before any write; FR-006):
 - Input yields an `RRule`, not an `RSet` (no EXDATE/RDATE lines).
 - The owning record is not an exception (`RecurrenceNotSupported`).
 - The model's start attribute is non-null when saving (`RecurrenceNotSupported`).
-- A finite rule's total occurrence count is ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`).
-- An infinite rule's occurrences from DTSTART to `now + horizon` number ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`).
+- A finite rule's total occurrence count is ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`), checked on save.
+- An infinite rule's occurrences from DTSTART to `now + horizon` number ≤ `groundhog.max_occurrences_per_series` (`OccurrenceLimitExceeded`), checked on save.
 
-## `groundhog_occurrences` — derived index (FR-002 as amended)
-
-| Column | Type | Notes |
-|---|---|---|
-| `recurrence_id` | foreignId → recurrences, `cascadeOnDelete` | |
-| `starts_at` | datetime | occurrence start, in model date format / app timezone |
-| `ends_at` | datetime, nullable | start + series duration; `null` when model has no end column |
-
-Primary key: `(recurrence_id, starts_at)`, no surrogate id. It doubles as the uniqueness rule,
-and on InnoDB it clusters each series' occurrences in start order, so expanding a series reads
-one contiguous range (measured for SC-003: count 0.50 s → 0.36 s on MySQL 8.4).
-Invariant: the content equals the raw rule expansion over `[DTSTART, materialized_until)` (or the
-whole rule when finite). It never reflects exclusions and it is never edited except through
-rebuild/extend.
+Nothing derived from the rule is stored (FR-002). The 0.1 table `groundhog_occurrences` and column
+`materialized_until` are dropped by `drop_groundhog_occurrence_index` (no-op on fresh installs).
 
 ## `groundhog_exclusions` — exceptions and cancellations
 
@@ -98,8 +84,8 @@ stateDiagram-v2
     [*] --> Series: create with recurrence_rule
     Plain --> Series: assign rule
     Series --> Plain: set rule null (exclusions reset, FR-022)
-    Series --> Series: change rule text / start (exclusions reset, index rebuilt)\nchange duration (index rebuilt)\nchange other attrs or re-assign identical rule (no change)
-    Series --> [*]: hard delete (rule, index, exclusions removed; exceptions force-deleted)
+    Series --> Series: change rule text / start (exclusions reset)\nchange duration, other attrs or re-assign identical rule (no stored change beyond the series row)
+    Series --> [*]: hard delete (rule, exclusions removed; exceptions force-deleted)
     Series --> Series: soft delete hides occurrences and exceptions; restore shows them
 
     state "Virtual occurrence" as Virtual
@@ -116,9 +102,10 @@ stateDiagram-v2
 ## Derived semantics (not stored)
 
 - **Occurrence end**: `occurrence start + (series end − series start)`.
-- **Horizon cap**: `(lower bound ?? now) + groundhog.horizon`; applied only to `is_infinite` rules
-  and only when the query has no upper bound on start/end.
-- **Materialisation ceiling**: reads never extend the index past `now + groundhog.max_materialization_ahead`;
-  a query that would need it throws `OccurrenceLimitExceeded` before writing.
+- **Horizon cap**: `(lower start bound ?? lower end bound ?? now) + groundhog.horizon`; applied
+  only to infinite rules and only when the query has no upper bound on start/end.
+- **Occurrences**: generated per query for the query's window and passed to SQL as one JSON
+  parameter; each series generates at most `groundhog.max_occurrences_per_series` per query
+  (`OccurrenceLimitExceeded`). Never stored (FR-002).
 - **Occurrence identity**: `(groundhog_series_key, groundhog_original_starts_at)`; unique within a
   model type. `OccurrenceCollection` keys its dictionary by it.
