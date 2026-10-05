@@ -1,1 +1,1 @@
-Documents Groundhog `dev-master` (unreleased) · [Repository](https://github.com/boysfromthefactory/groundhog) · [README](https://github.com/boysfromthefactory/groundhog/blob/master/README.md) · [Changelog](https://github.com/boysfromthefactory/groundhog/blob/master/CHANGELOG.md)
+Documents Groundhog `v0.1.0` · [Repository](https://github.com/boysfromthefactory/groundhog) · [README](https://github.com/boysfromthefactory/groundhog/blob/master/README.md) · [Changelog](https://github.com/boysfromthefactory/groundhog/blob/master/CHANGELOG.md)

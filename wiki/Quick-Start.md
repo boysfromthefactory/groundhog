@@ -7,8 +7,8 @@ steps in order in a Laravel 13 application; each step shows what you should see.
 composer require boysfromthefactory/groundhog
 ```
 
-> **Before the first tagged release** the package is not on Packagist yet. Add the GitHub
-> repository to your application's `composer.json` and require the development branch:
+> **Until the package is on Packagist**, add the GitHub repository to your application's
+> `composer.json` and require the tagged release:
 >
 > ```json
 > "repositories": [
@@ -17,7 +17,7 @@ composer require boysfromthefactory/groundhog
 > ```
 >
 > ```bash
-> composer require boysfromthefactory/groundhog:dev-master
+> composer require boysfromthefactory/groundhog:^0.1
 > ```
 >
 > The repository is public, so no credentials are needed.
