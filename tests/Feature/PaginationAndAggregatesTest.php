@@ -142,3 +142,13 @@ it('groups and de-duplicates over occurrences', function () {
     expect($perLocation)->toBe(['Room A=6', 'Room B=5'])
         ->and($titles)->toBe(['Alpha', 'Bravo', 'Charlie']);
 });
+
+it('finds a virtual occurrence in a collection by the occurrence itself', function () {
+    $all = daysOneToFive()->get();
+    $target = $all->first(fn (Meeting $m) => ! $m->exists && $m->title === 'Bravo' && $m->starts_at->format('d') === '04');
+
+    $found = $all->find($target);
+
+    expect($found->title)->toBe('Bravo')
+        ->and($found->starts_at->format('Y-m-d H:i'))->toBe('2026-03-04 12:00');
+});

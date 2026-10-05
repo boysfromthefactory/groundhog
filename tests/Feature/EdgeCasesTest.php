@@ -182,3 +182,10 @@ it('allows key-based iteration over stored rows', function () {
 
     expect($seen)->toBe([$series->id]);
 });
+
+it('excludes a key from stored rows with whereKeyNot()', function () {
+    $series = mondaySeries();
+    $plain = Meeting::create(['title' => 'Review', 'starts_at' => '2026-03-11 14:00:00', 'ends_at' => '2026-03-11 15:00:00']);
+
+    expect(Meeting::whereKeyNot($plain->id)->get()->modelKeys())->toBe([$series->id]);
+});

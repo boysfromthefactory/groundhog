@@ -140,3 +140,18 @@ it('answers pluck, value and sole over occurrences', function () {
         ->and(Meeting::whereBetween('starts_at', march())->value('title'))->toBe('Standup')
         ->and(Meeting::whereBetween('starts_at', ['2026-03-16 00:00:00', '2026-03-16 23:59:59'])->sole()->starts_at->format('Y-m-d H:i'))->toBe('2026-03-16 09:00');
 });
+
+it('finds an occurrence again by series key and original start', function () {
+    $series = mondaySeries();
+    $byIdentity = fn () => Meeting::where('groundhog_series_key', $series->id)
+        ->where('groundhog_original_starts_at', '2026-03-16 09:00:00')
+        ->sole();
+
+    $virtual = $byIdentity();
+    $virtual->update(['location' => 'Room B']);
+    $exception = $byIdentity();
+
+    expect($virtual->starts_at->format('Y-m-d H:i'))->toBe('2026-03-16 09:00')
+        ->and($exception->exists)->toBeTrue()
+        ->and($exception->location)->toBe('Room B');
+});

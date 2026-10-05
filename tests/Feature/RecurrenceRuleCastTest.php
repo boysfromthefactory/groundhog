@@ -130,3 +130,18 @@ it('persists the rule on saveQuietly()', function () {
     expect(Recurrence::count())->toBe(1)
         ->and(Meeting::whereBetween('starts_at', march())->count())->toBe(5);
 });
+
+it('exposes the stored rule row through recurrence()', function () {
+    $series = mondaySeries();
+
+    $recurrence = $series->recurrence;
+
+    expect($recurrence)->toBeInstanceOf(Recurrence::class)
+        ->and($recurrence->rule)->toBe("DTSTART:20260302T090000Z\nRRULE:FREQ=WEEKLY;BYDAY=MO")
+        ->and($recurrence->timezone)->toBe('UTC')
+        ->and($recurrence->is_infinite)->toBeTrue();
+
+    $series->update(['recurrence_rule' => null]);
+
+    expect(Meeting::find($series->id)->recurrence)->toBeNull();
+});

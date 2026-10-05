@@ -194,3 +194,32 @@ it('gives stored rows loaded without expansion the same identity attributes', fu
         ->and($stored[$occurrence->id]->series?->is($series))->toBeTrue()
         ->and($stored[$plain->id]->series)->toBeNull();
 });
+
+it('persists an exception through decrement() on a virtual occurrence', function () {
+    $series = mondaySeries(['capacity' => 10]);
+
+    occurrenceOn('2026-03-23')->decrement('capacity', 2);
+
+    $exception = occurrenceOn('2026-03-23');
+
+    expect($exception->exists)->toBeTrue()
+        ->and($exception->capacity)->toBe(8)
+        ->and(DB::table('meetings')->find($series->id)->capacity)->toBe(10)
+        ->and(DB::table('groundhog_exclusions')->count())->toBe(1);
+});
+
+it('resolves the identity of a cursor-loaded exception on first use', function () {
+    $series = mondaySeries();
+    $occurrence = occurrenceOn('2026-03-16');
+    $occurrence->save();
+    $exceptionId = $occurrence->id;
+
+    $streamed = Meeting::withoutOccurrences()->where('title', 'Standup')->cursor()
+        ->first(fn (Meeting $meeting) => $meeting->id === $exceptionId);
+
+    $hadIdentity = array_key_exists('groundhog_series_key', $streamed->getAttributes());
+
+    expect($hadIdentity)->toBeFalse()
+        ->and($streamed->isOccurrenceException())->toBeTrue()
+        ->and((int) $streamed->toArray()['groundhog_series_key'])->toBe($series->id);
+});

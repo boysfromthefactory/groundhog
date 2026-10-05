@@ -65,6 +65,20 @@ it('keeps the occurrence cancelled when an exception loaded by key is hard-delet
         ->and(DB::table('groundhog_exclusions')->sole()->exception_id)->toBeNull();
 });
 
+it('keeps the occurrence cancelled when an exception of a model without soft deletes is deleted', function () {
+    Shift::create(['label' => 'Early', 'starts_at' => '2026-03-02 06:00:00', 'recurrence_rule' => 'FREQ=WEEKLY;BYDAY=MO']);
+    $sixteenth = fn () => Shift::whereBetween('starts_at', ['2026-03-16 00:00:00', '2026-03-16 23:59:59']);
+    $exception = $sixteenth()->sole();
+    $exception->label = 'Late';
+    $exception->save();
+
+    $sixteenth()->sole()->delete();
+
+    expect($sixteenth()->count())->toBe(0)
+        ->and(DB::table('shifts')->count())->toBe(1)
+        ->and(DB::table('groundhog_exclusions')->sole()->exception_id)->toBeNull();
+});
+
 it('propagates series edits to virtual occurrences but not to exceptions (US4-3, US4-7, FR-021)', function () {
     $series = mondaySeries();
     exceptionOnSixteenth();
