@@ -2,7 +2,7 @@
 
 All notable changes to `Groundhog` will be documented in this file.
 
-## Unreleased
+## v0.2.0 - 2026-10-05
 
 ### Changed
 
